@@ -235,3 +235,76 @@ router.get('/keuangan/saldo-akhir', async (req, res) => {
         res.status(500).json({ message: 'Gagal mengambil saldo akhir' });
     }
 });
+
+
+// =================================================================
+// TEMPAT BUAT PELATIHAN
+
+
+// **GET Semua Data Pelatihan**
+router.get('/pelatihan', (req, res) => {
+    db.query('SELECT * FROM pelatihan_member', (err, results) => {
+        if (err) {
+            console.error('❌ Error mengambil data pelatihan:', err);
+            return res.status(500).json({ message: 'Gagal mengambil data pelatihan' });
+        }
+        res.json(results);
+    });
+});
+
+// **POST Tambah Pelatihan Baru**
+router.post('/pelatihan/tambah', (req, res) => {
+    const { judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan } = req.body;
+    if (!judul_pelatihan || !tanggal_pelatihan || !deskripsi_pelatihan) {
+        return res.status(400).json({ message: 'Semua field harus diisi' });
+    }
+
+    const sql = 'INSERT INTO pelatihan_member (judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan) VALUES (?, ?, ?)';
+    db.query(sql, [judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan], (err, result) => {
+        if (err) {
+            console.error('❌ Error menambahkan pelatihan:', err);
+            return res.status(500).json({ message: 'Gagal menambahkan pelatihan' });
+        }
+        res.json({ message: 'Pelatihan berhasil ditambahkan', id: result.insertId });
+    });
+});
+
+// **PUT Edit Pelatihan**
+router.put('/pelatihan/edit/:id', (req, res) => {
+    const { id } = req.params;
+    const { judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan } = req.body;
+
+    if (!judul_pelatihan || !tanggal_pelatihan || !deskripsi_pelatihan) {
+        return res.status(400).json({ message: 'Semua field harus diisi' });
+    }
+
+    const sql = 'UPDATE pelatihan_member SET judul_pelatihan = ?, tanggal_pelatihan = ?, deskripsi_pelatihan = ? WHERE id = ?';
+    db.query(sql, [judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan, id], (err, result) => {
+        if (err) {
+            console.error('❌ Error mengedit pelatihan:', err);
+            return res.status(500).json({ message: 'Gagal mengedit pelatihan' });
+        }
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Pelatihan tidak ditemukan' });
+        }
+        res.json({ message: 'Pelatihan berhasil diperbarui' });
+    });
+});
+
+
+// **DELETE Hapus Pelatihan**
+router.delete('/pelatihan/delete/:id', (req, res) => {
+    const { id } = req.params;
+    const sql = 'DELETE FROM pelatihan_member WHERE id = ?';
+
+    db.query(sql, [id], (err, result) => {
+        if (err) {
+            console.error('❌ Error menghapus pelatihan:', err);
+            return res.status(500).json({ message: 'Gagal menghapus pelatihan' });
+        }
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: 'Pelatihan tidak ditemukan' });
+        }
+        res.json({ message: 'Pelatihan berhasil dihapus' });
+    });
+});
