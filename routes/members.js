@@ -122,4 +122,17 @@ router.put('/verify-member/:member_id', (req, res) => {
     );
 });
 
+
+// **GET Semua Data Pelatihan**
+router.get('/pelatihan', (req, res) => {
+    db.query('SELECT * FROM pelatihan_member', (err, results) => {
+        if (err) {
+            console.error('❌ Error mengambil data pelatihan:', err);
+            return res.status(500).json({ message: 'Gagal mengambil data pelatihan' });
+        }
+        res.json(results);
+    });
+});
+
+
 module.exports = router;
