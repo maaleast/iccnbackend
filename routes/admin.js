@@ -254,13 +254,13 @@ router.get('/pelatihan', (req, res) => {
 
 // **POST Tambah Pelatihan Baru**
 router.post('/pelatihan/tambah', (req, res) => {
-    const { judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan } = req.body;
-    if (!judul_pelatihan || !tanggal_pelatihan || !deskripsi_pelatihan) {
+    const { judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan, link, harga_pelatihan } = req.body;
+    if (!judul_pelatihan || !tanggal_pelatihan || !deskripsi_pelatihan || !link || !harga_pelatihan) {
         return res.status(400).json({ message: 'Semua field harus diisi' });
     }
 
-    const sql = 'INSERT INTO pelatihan_member (judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan) VALUES (?, ?, ?)';
-    db.query(sql, [judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan], (err, result) => {
+    const sql = 'INSERT INTO pelatihan_member (judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan, link, harga_pelatihan) VALUES (?, ?, ?, ?, ?)';
+    db.query(sql, [judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan, link, harga_pelatihan], (err, result) => {
         if (err) {
             console.error('❌ Error menambahkan pelatihan:', err);
             return res.status(500).json({ message: 'Gagal menambahkan pelatihan' });
@@ -272,14 +272,14 @@ router.post('/pelatihan/tambah', (req, res) => {
 // **PUT Edit Pelatihan**
 router.put('/pelatihan/edit/:id', (req, res) => {
     const { id } = req.params;
-    const { judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan } = req.body;
+    const { judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan, link, harga_pelatihan } = req.body;
 
-    if (!judul_pelatihan || !tanggal_pelatihan || !deskripsi_pelatihan) {
+    if (!judul_pelatihan || !tanggal_pelatihan || !deskripsi_pelatihan || !link || !harga_pelatihan) {
         return res.status(400).json({ message: 'Semua field harus diisi' });
     }
 
-    const sql = 'UPDATE pelatihan_member SET judul_pelatihan = ?, tanggal_pelatihan = ?, deskripsi_pelatihan = ? WHERE id = ?';
-    db.query(sql, [judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan, id], (err, result) => {
+    const sql = 'UPDATE pelatihan_member SET judul_pelatihan = ?, tanggal_pelatihan = ?, deskripsi_pelatihan = ?, link = ?, harga_pelatihan = ? WHERE id = ?';
+    db.query(sql, [judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan, link, harga_pelatihan, id], (err, result) => {
         if (err) {
             console.error('❌ Error mengedit pelatihan:', err);
             return res.status(500).json({ message: 'Gagal mengedit pelatihan' });
