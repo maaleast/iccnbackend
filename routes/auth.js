@@ -152,6 +152,102 @@ router.post('/login', (req, res) => {
     });
 });
 
+//=========================================
+// RESET PASSWORD
+//=========================================
+
+// **RESET PASSWORD**
+router.post('/reset-password', async (req, res) => {
+    console.log("🔹 Reset password route hit");
+    console.log("📥 Request Body:", req.body);
+
+    const { email, newPassword } = req.body;
+
+    if (!email || !newPassword) {
+        return res.status(400).json({ message: 'Email dan password baru harus diisi' });
+    }
+
+    db.query('SELECT * FROM users WHERE email = ?', [email], async (err, results) => {
+        if (err || results.length === 0) {
+            console.error("❌ Email tidak ditemukan");
+            return res.status(404).json({ message: 'Email tidak ditemukan' });
+        }
+
+        const user = results[0];
+        const resetToken = uuidv4();
+        const resetTokenExpiry = Date.now() + 3600000; // 1 jam dari sekarang
+
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+        db.query(
+            'UPDATE users SET reset_token = ?, reset_token_expiry = ?, password = ? WHERE id = ?',
+            [resetToken, resetTokenExpiry, hashedPassword, user.id],
+            async (err) => {
+                if (err) {
+                    console.error("❌ Gagal menyimpan token reset:", err);
+                    return res.status(500).json({ message: 'Gagal menyimpan token reset', error: err });
+                }
+
+                try {
+                    await transporter.sendMail({
+                        from: process.env.SMTP_EMAIL,
+                        to: email,
+                        subject: 'Verifikasi Reset Password ICCN',
+                        html: `<p>Klik <a href="${process.env.BASE_URL}/auth/verify-reset-password?token=${resetToken}">di sini</a> untuk verifikasi reset password.</p>`
+                    });
+
+                    res.status(200).json({ message: 'Email verifikasi reset password telah dikirim. Silakan cek email Anda.' });
+                } catch (error) {
+                    console.error("❌ Gagal mengirim email:", error);
+                    res.status(500).json({ message: 'Gagal mengirim email verifikasi', error });
+                }
+            }
+        );
+    });
+});
+
+// **VERIFIKASI RESET PASSWORD**
+router.get('/verify-reset-password', (req, res) => {
+    const { token } = req.query;
+
+    if (!token) {
+        return res.status(400).json({ message: 'Token tidak valid' });
+    }
+
+    db.query('SELECT * FROM users WHERE reset_token = ? AND reset_token_expiry > ?', [token, Date.now()], (err, results) => {
+        if (err || results.length === 0) {
+            console.error("❌ Token reset tidak valid atau kadaluarsa");
+            return res.status(400).json({ message: 'Token reset tidak valid atau kadaluarsa' });
+        }
+
+        db.query(
+            'UPDATE users SET reset_token = NULL, reset_token_expiry = NULL WHERE reset_token = ?',
+            [token],
+            (err) => {
+                if (err) {
+                    console.error("❌ Gagal verifikasi reset password:", err);
+                    return res.status(500).json({ message: 'Gagal verifikasi reset password', error: err });
+                }
+
+                res.send(`
+                    <html>
+                    <head>
+                        <script src="https://cdn.tailwindcss.com"></script>
+                    </head>
+                    <body class="flex justify-center items-center h-screen bg-gradient-to-br from-gray-900 via-blue-800 to-blue-500">
+                        <div class="bg-white/20 backdrop-blur-md p-6 rounded-lg shadow-lg text-center max-w-sm border border-white/30">
+                            <h2 class="text-white text-lg font-semibold">Reset Password Berhasil!</h2>
+                            <p class="mt-2 text-gray-200">Silakan login untuk melanjutkan.</p>
+                        </div>
+                    </body>
+                    </html>
+                `);
+            }
+        );
+    });
+});
+
+
 
 
 

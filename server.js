@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2');
+const router = express.Router();
 
 const authRoutes = require('./routes/auth');
 const memberRoutes = require('./routes/members');
@@ -55,7 +56,6 @@ app.get('/users', (req, res) => {
         res.json(results);
     });
 });
-
 
 // iki gawe akses upload
 app.use('/uploads', express.static('uploads'));
