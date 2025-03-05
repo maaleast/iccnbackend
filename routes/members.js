@@ -9,21 +9,30 @@ const router = express.Router();
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         if (file.fieldname === 'file_sk') {
-            cb(null, 'uploads/file_sk/'); // Simpan file SK ke folder khusus
+            cb(null, 'uploads/file_sk/');
         } else if (file.fieldname === 'bukti_pembayaran' || file.fieldname === 'bukti_pembayaran_perpanjang') {
-            cb(null, 'uploads/bukti_pembayaran/'); // Simpan semua bukti pembayaran ke folder yang sama
+            cb(null, 'uploads/bukti_pembayaran/');
+        } else if (file.fieldname === 'logo') {
+            const { tipe_keanggotaan } = req.body;
+            if (tipe_keanggotaan === 'Universitas') {
+                cb(null, 'uploads/universitas/');
+            } else if (tipe_keanggotaan === 'Perusahaan') {
+                cb(null, 'uploads/perusahaan/');
+            } else {
+                cb(new Error('Tipe keanggotaan tidak valid untuk upload logo!'));
+            }
         } else {
             cb(new Error('Jenis file tidak valid!'));
         }
     },
     filename: (req, file, cb) => {
-        cb(null, Date.now() + path.extname(file.originalname)); // Rename file agar unik
+        cb(null, Date.now() + path.extname(file.originalname));
     }
 });
 
 const upload = multer({
     storage,
-    limits: { fileSize: 10 * 1024 * 1024 }, // Maksimal 10MB
+    limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         const fileTypes = /pdf|doc|docx|png|jpg|jpeg/;
         const extName = fileTypes.test(path.extname(file.originalname).toLowerCase());
@@ -67,9 +76,9 @@ router.post('/checkUserRole', (req, res) => {
 });
 
 // **REGISTER MEMBER**
-router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'bukti_pembayaran' }]), (req, res) => {
+router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'bukti_pembayaran' }, { name: 'logo' }]), (req, res) => {
     const { user_id, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama_pembayar, nominal_transfer, nomor_wa, nama_kuitansi } = req.body;
-    let { additional_members_info } = req.body; // Bisa kosong
+    let { additional_members_info } = req.body;
 
     if (!req.files || !req.files['file_sk'] || !req.files['bukti_pembayaran']) {
         return res.status(400).json({ message: 'File SK dan Bukti Pembayaran harus diunggah!' });
@@ -77,24 +86,40 @@ router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'buk
 
     const fileSkPath = `/uploads/file_sk/${req.files['file_sk'][0].filename}`;
     const buktiPembayaranPath = `/uploads/bukti_pembayaran/${req.files['bukti_pembayaran'][0].filename}`;
+    const logoPath = req.files['logo'] ? `/uploads/${tipe_keanggotaan.toLowerCase()}/${req.files['logo'][0].filename}` : null;
 
-    // Kalau additional_members_info kosong, set jadi NULL
     additional_members_info = additional_members_info ? additional_members_info : null;
 
-    db.query(
-        'INSERT INTO members (user_id, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama_pembayar, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, file_sk, bukti_pembayaran, status_verifikasi, tanggal_submit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "PENDING", NOW())',
-        [user_id, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama_pembayar, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, fileSkPath, buktiPembayaranPath],
-        (err, result) => {
-            if (err) return res.status(500).json({ message: 'Gagal mendaftar sebagai member', error: err });
+    const tanggalSubmit = new Date();
+    const masaAktif = new Date(tanggalSubmit);
+    masaAktif.setFullYear(masaAktif.getFullYear() + 1);
+    const masaAktifFormatted = masaAktif.toISOString().split('T')[0];
 
-            // Update role user menjadi 'member'
+    db.query(
+        'INSERT INTO members (user_id, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama_pembayar, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, file_sk, bukti_pembayaran, logo, status_verifikasi, tanggal_submit, masa_aktif) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "PENDING", NOW(), ?)',
+        [user_id, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama_pembayar, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, fileSkPath, buktiPembayaranPath, logoPath, masaAktifFormatted],
+        (err, result) => {
+            if (err) {
+                console.error('Error saat mendaftar member:', err);
+                return res.status(500).json({ message: 'Gagal mendaftar sebagai member', error: err });
+            }
+
             db.query(
                 'UPDATE users SET role = "member" WHERE id = ?',
                 [user_id],
                 (err, result) => {
-                    if (err) return res.status(500).json({ message: 'Gagal memperbarui role pengguna', error: err });
+                    if (err) {
+                        console.error('Error saat memperbarui role pengguna:', err);
+                        return res.status(500).json({ message: 'Gagal memperbarui role pengguna', error: err });
+                    }
 
-                    res.status(201).json({ message: 'Pendaftaran member berhasil, menunggu verifikasi', file_sk: fileSkPath, bukti_pembayaran: buktiPembayaranPath });
+                    res.status(201).json({ 
+                        message: 'Pendaftaran member berhasil, menunggu verifikasi', 
+                        file_sk: fileSkPath, 
+                        bukti_pembayaran: buktiPembayaranPath, 
+                        logo: logoPath,
+                        masa_aktif: masaAktifFormatted 
+                    });
                 }
             );
         }
