@@ -37,10 +37,28 @@ router.get('/all-users', (req, res) => {
     });
 });
 
+// **GET Detail Member by ID**
+router.get('/member/:id', (req, res) => {
+    const { id } = req.params;
+
+    db.query('SELECT * FROM members WHERE id = ?', [id], (err, results) => {
+        if (err) {
+            console.error('❌ Error mengambil detail member:', err);
+            return res.status(500).json({ message: 'Gagal mengambil detail member' });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ message: 'Member tidak ditemukan' });
+        }
+
+        res.json(results[0]); // Kirim data member pertama yang ditemukan
+    });
+});
+
 module.exports = router;
 
-
 // **UPDATE STATUS VERIFIKASI MEMBER**
+
 router.put('/verifikasi/diterima/:id', (req, res) => {
     const memberId = req.params.id;
     db.query(
@@ -71,6 +89,66 @@ router.put('/verifikasi/ditolak/:id', (req, res) => {
     );
 });
 
+router.put('/verifikasi/perpanjang/:id', (req, res) => {
+    const memberId = req.params.id;
+    const { masa_aktif } = req.body;
+
+    db.query(
+        'UPDATE members SET status_verifikasi = "PERPANJANG", masa_aktif = ? WHERE id = ?',
+        [masa_aktif, memberId],
+        (err, result) => {
+            if (err) {
+                console.error('❌ Gagal mengubah status menjadi PERPANJANG:', err);
+                return res.status(500).json({ message: 'Gagal memperbarui status verifikasi' });
+            }
+            res.json({ message: 'Status berhasil diperbarui menjadi PERPANJANG', masa_aktif });
+        }
+    );
+});
+
+// **CHECK MASA AKTIF**
+router.get('/check-masa-aktif', (req, res) => {
+    const currentDate = new Date().toISOString().split('T')[0]; // Format: YYYY-MM-DD
+
+    db.query(
+        'UPDATE members SET status_verifikasi = "PERPANJANG" WHERE masa_aktif < ? AND status_verifikasi IN ("DITERIMA", "DITOLAK")',
+        [currentDate],
+        (err, result) => {
+            if (err) {
+                console.error('❌ Gagal memeriksa masa aktif:', err);
+                return res.status(500).json({ message: 'Gagal memeriksa masa aktif' });
+            }
+            res.json({ message: 'Pemeriksaan masa aktif selesai', updated: result.affectedRows });
+        }
+    );
+});
+
+// **UPDATE MASA AKTIF**
+router.put('/update-masa-aktif/:id', (req, res) => {
+    const memberId = req.params.id;
+    const { masa_aktif } = req.body;
+
+    db.query(
+        'UPDATE members SET masa_aktif = ? WHERE id = ?',
+        [masa_aktif, memberId],
+        (err, result) => {
+            if (err) {
+                console.error('❌ Gagal mengupdate masa aktif:', err);
+                return res.status(500).json({ message: 'Gagal mengupdate masa aktif' });
+            }
+            res.json({ message: 'Masa aktif berhasil diperbarui', masa_aktif });
+        }
+    );
+});
+
+
+
+module.exports = router;
+
+// =========================================================
+// =========================================================
+// KEUANGAN AKUNTAN
+// =========================================================
 
 // **🔹 Tambah Pemasukan/Pengeluaran**
 router.post('/keuangan/tambah', async (req, res) => {
@@ -243,7 +321,25 @@ router.get('/keuangan/saldo-akhir', async (req, res) => {
 
 // =================================================================
 // TEMPAT BUAT PELATIHAN
+// =================================================================
+//D-4 ALL PELATIHAN
+const uploadDir = path.join(__dirname, '../uploads/pelatihan');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
 
+const uploadStoragePelatihan = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, uploadDir);
+    },
+    filename: (req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        const ext = path.extname(file.originalname);
+        cb(null, uniqueSuffix + ext);
+    },
+});
+
+const uploadPelatihan = multer({ storage: uploadStoragePelatihan });
 
 // **GET Semua Data Pelatihan**
 router.get('/pelatihan', (req, res) => {
@@ -256,15 +352,33 @@ router.get('/pelatihan', (req, res) => {
     });
 });
 
+// **GET Pelatihan berdasarkan ID**
+router.get('/pelatihan/:id', (req, res) => {
+    const { id } = req.params;
+    db.query('SELECT * FROM pelatihan_member WHERE id = ?', [id], (err, results) => {
+        if (err) {
+            console.error('❌ Error mengambil data pelatihan:', err);
+            return res.status(500).json({ message: 'Gagal mengambil data pelatihan' });
+        }
+        if (results.length === 0) {
+            return res.status(404).json({ message: 'Pelatihan tidak ditemukan' });
+        }
+        res.json(results[0]); // Kirim data sebagai object, bukan array
+    });
+});
+
+
 // **POST Tambah Pelatihan Baru**
-router.post('/pelatihan/tambah', (req, res) => {
-    const { judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link } = req.body;
-    if (!judul_pelatihan || !tanggal_pelatihan || !tanggal_berakhir || !deskripsi_pelatihan || !link) {
+router.post('/pelatihan/tambah', uploadPelatihan.single('banner'), (req, res) => {
+    const { judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge } = req.body;
+    const banner = req.file ? `/uploads/pelatihan/${req.file.filename}` : null;
+
+    if (!judul_pelatihan || !tanggal_pelatihan || !tanggal_berakhir || !deskripsi_pelatihan || !link || !narasumber || !banner || !badge) {
         return res.status(400).json({ message: 'Semua field harus diisi' });
     }
 
-    const sql = 'INSERT INTO pelatihan_member (judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link) VALUES (?, ?, ?, ?, ?)';
-    db.query(sql, [judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link], (err, result) => {
+    const sql = 'INSERT INTO pelatihan_member (judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, upload_banner, badge) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
+    db.query(sql, [judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, banner, badge], (err, result) => {
         if (err) {
             console.error('❌ Error menambahkan pelatihan:', err);
             return res.status(500).json({ message: 'Gagal menambahkan pelatihan' });
@@ -274,16 +388,40 @@ router.post('/pelatihan/tambah', (req, res) => {
 });
 
 // **PUT Edit Pelatihan**
-router.put('/pelatihan/edit/:id', (req, res) => {
+router.put('/pelatihan/edit/:id', uploadPelatihan.single('banner'), (req, res) => {
     const { id } = req.params;
-    const { judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link } = req.body;
+    const { judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge } = req.body;
+    const banner = req.file ? `/uploads/pelatihan/${req.file.filename}` : null;
 
-    if (!judul_pelatihan || !tanggal_pelatihan || !tanggal_berakhir || !deskripsi_pelatihan || !link) {
+    if (!judul_pelatihan || !tanggal_pelatihan || !tanggal_berakhir || !deskripsi_pelatihan || !link || !narasumber || !badge) {
         return res.status(400).json({ message: 'Semua field harus diisi' });
     }
 
-    const sql = 'UPDATE pelatihan_member SET judul_pelatihan = ?, tanggal_pelatihan = ?, tanggal_berakhir = ?, deskripsi_pelatihan = ?, link = ? WHERE id = ?';
-    db.query(sql, [judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, id], (err, result) => {
+    // Cek apakah ingin mengupdate banner
+    let sql, values;
+    if (banner) {
+        sql = 'UPDATE pelatihan_member SET judul_pelatihan = ?, tanggal_pelatihan = ?, tanggal_berakhir = ?, deskripsi_pelatihan = ?, link = ?, narasumber = ?, badge = ?, upload_banner = ? WHERE id = ?';
+        values = [judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge, banner, id];
+
+        // Hapus banner lama jika ada
+        db.query('SELECT upload_banner FROM pelatihan_member WHERE id = ?', [id], (err, results) => {
+            if (err) {
+                console.error('❌ Error mendapatkan banner lama:', err);
+                return res.status(500).json({ message: 'Gagal mengedit pelatihan' });
+            }
+            if (results.length > 0 && results[0].upload_banner) {
+                const oldBannerPath = path.join(__dirname, '..', results[0].upload_banner);
+                fs.unlink(oldBannerPath, (err) => {
+                    if (err) console.error('⚠️ Gagal menghapus banner lama:', err);
+                });
+            }
+        });
+    } else {
+        sql = 'UPDATE pelatihan_member SET judul_pelatihan = ?, tanggal_pelatihan = ?, tanggal_berakhir = ?, deskripsi_pelatihan = ?, link = ?, narasumber = ?, badge = ? WHERE id = ?';
+        values = [judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge, id];
+    }
+
+    db.query(sql, values, (err, result) => {
         if (err) {
             console.error('❌ Error mengedit pelatihan:', err);
             return res.status(500).json({ message: 'Gagal mengedit pelatihan' });
@@ -295,20 +433,39 @@ router.put('/pelatihan/edit/:id', (req, res) => {
     });
 });
 
+
 // **DELETE Hapus Pelatihan**
 router.delete('/pelatihan/delete/:id', (req, res) => {
     const { id } = req.params;
-    const sql = 'DELETE FROM pelatihan_member WHERE id = ?';
 
-    db.query(sql, [id], (err, result) => {
+    // Cek apakah pelatihan ada dan ambil banner-nya
+    db.query('SELECT upload_banner FROM pelatihan_member WHERE id = ?', [id], (err, results) => {
         if (err) {
-            console.error('❌ Error menghapus pelatihan:', err);
+            console.error('❌ Error mendapatkan data pelatihan:', err);
             return res.status(500).json({ message: 'Gagal menghapus pelatihan' });
         }
-        if (result.affectedRows === 0) {
+        if (results.length === 0) {
             return res.status(404).json({ message: 'Pelatihan tidak ditemukan' });
         }
-        res.json({ message: 'Pelatihan berhasil dihapus' });
+
+        const bannerPath = results[0].upload_banner ? path.join(__dirname, '..', results[0].upload_banner) : null;
+
+        // Hapus data pelatihan dari database
+        db.query('DELETE FROM pelatihan_member WHERE id = ?', [id], (err, result) => {
+            if (err) {
+                console.error('❌ Error menghapus pelatihan:', err);
+                return res.status(500).json({ message: 'Gagal menghapus pelatihan' });
+            }
+
+            if (result.affectedRows > 0 && bannerPath) {
+                // Hapus file banner jika ada
+                fs.unlink(bannerPath, (err) => {
+                    if (err) console.error('⚠️ Gagal menghapus file banner:', err);
+                });
+            }
+
+            res.json({ message: 'Pelatihan berhasil dihapus' });
+        });
     });
 });
 
@@ -359,7 +516,7 @@ router.post('/gallery/upload', upload.array('images', 5), (req, res) => {
         return `${req.protocol}://${req.get('host')}/uploads/gallery/${file.filename}`;
     });
 
-    // Simpan URL gambar ke database
+    // Simpan URL gambar ke databaseS
     const sql = 'INSERT INTO gallery (image_url) VALUES ?';
     const values = imageUrls.map(url => [url]);
 

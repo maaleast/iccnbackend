@@ -10,8 +10,8 @@ const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         if (file.fieldname === 'file_sk') {
             cb(null, 'uploads/file_sk/'); // Simpan file SK ke folder khusus
-        } else if (file.fieldname === 'bukti_pembayaran') {
-            cb(null, 'uploads/bukti_pembayaran/'); // Simpan bukti pembayaran ke folder khusus
+        } else if (file.fieldname === 'bukti_pembayaran' || file.fieldname === 'bukti_pembayaran_perpanjang') {
+            cb(null, 'uploads/bukti_pembayaran/'); // Simpan semua bukti pembayaran ke folder yang sama
         } else {
             cb(new Error('Jenis file tidak valid!'));
         }
@@ -37,7 +37,36 @@ const upload = multer({
     }
 });
 
+//** NGECEK UDAH DAFTAR BELUM */
+router.post('/checkUserRole', (req, res) => {
+    const { user_id } = req.body;
 
+    if (!user_id) {
+        return res.status(400).json({ message: 'User ID tidak ditemukan!' });
+    }
+
+    // Query untuk memeriksa role pengguna di tabel users
+    db.query('SELECT role FROM users WHERE id = ?', [user_id], (err, results) => {
+        if (err) return res.status(500).json({ message: 'Terjadi kesalahan server', error: err });
+
+        // Jika tidak ada data pengguna
+        if (results.length === 0) {
+            return res.status(404).json({ message: 'Pengguna tidak ditemukan!' });
+        }
+
+        const userRole = results[0].role;
+
+        // Jika role adalah 'member', arahkan ke halaman member
+        if (userRole === 'member') {
+            return res.json({ role: 'member', message: 'Anda sudah menjadi member. Selamat datang!' });
+        }
+
+        // Jika role bukan 'member', arahkan ke halaman pendaftaran
+        res.json({ role: userRole, message: 'Anda belum menjadi member. Silakan daftar terlebih dahulu.' });
+    });
+});
+
+// **REGISTER MEMBER**
 router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'bukti_pembayaran' }]), (req, res) => {
     const { user_id, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama_pembayar, nominal_transfer, nomor_wa, nama_kuitansi } = req.body;
     let { additional_members_info } = req.body; // Bisa kosong
@@ -72,38 +101,28 @@ router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'buk
     );
 });
 
+// **REQUEST PERPANJANG MEMBER**
+router.post('/request-perpanjang', upload.single('bukti_pembayaran_perpanjang'), (req, res) => {
+    const { user_id, nama_kuitansi, nominal_transfer } = req.body;
+    const buktiPembayaranPath = req.file ? `/uploads/bukti_pembayaran/${req.file.filename}` : null;
 
-
-
-//** NGECEK UDAH DAFTAR BELUM */
-router.post('/checkUserRole', (req, res) => {
-    const { user_id } = req.body;
-
-    if (!user_id) {
-        return res.status(400).json({ message: 'User ID tidak ditemukan!' });
+    if (!user_id || !nama_kuitansi || !nominal_transfer || !buktiPembayaranPath) {
+        return res.status(400).json({ message: 'User ID, Nama Kuitansi, Jumlah Transfer, dan Bukti Pembayaran wajib diisi!' });
     }
 
-    // Query untuk memeriksa role pengguna di tabel users
-    db.query('SELECT role FROM users WHERE id = ?', [user_id], (err, results) => {
-        if (err) return res.status(500).json({ message: 'Terjadi kesalahan server', error: err });
+    // Update data di tabel members
+    db.query(
+        `UPDATE members 
+         SET nama_kuitansi = ?, nominal_transfer = ?, bukti_pembayaran = ?, status_verifikasi = 'PENDING PERPANJANG', tanggal_submit = NOW()
+         WHERE user_id = ?`,
+        [nama_kuitansi, nominal_transfer, buktiPembayaranPath, user_id],
+        (err, result) => {
+            if (err) return res.status(500).json({ message: 'Gagal mengajukan perpanjangan', error: err });
 
-        // Jika tidak ada data pengguna
-        if (results.length === 0) {
-            return res.status(404).json({ message: 'Pengguna tidak ditemukan!' });
+            res.status(200).json({ message: 'Permohonan perpanjangan berhasil diajukan', bukti_pembayaran: buktiPembayaranPath });
         }
-
-        const userRole = results[0].role;
-
-        // Jika role adalah 'member', arahkan ke halaman member
-        if (userRole === 'member') {
-            return res.json({ role: 'member', message: 'Anda sudah menjadi member. Selamat datang!' });
-        }
-
-        // Jika role bukan 'member', arahkan ke halaman pendaftaran
-        res.json({ role: userRole, message: 'Anda belum menjadi member. Silakan daftar terlebih dahulu.' });
-    });
+    );
 });
-
 
 // **VERIFIKASI MEMBER (ADMIN)**
 router.put('/verify-member/:member_id', (req, res) => {
@@ -129,7 +148,6 @@ router.put('/verify-member/:member_id', (req, res) => {
     );
 });
 
-
 // **GET Semua Data Pelatihan**
 router.get('/pelatihan', (req, res) => {
     db.query('SELECT * FROM pelatihan_member', (err, results) => {
@@ -141,9 +159,7 @@ router.get('/pelatihan', (req, res) => {
     });
 });
 
-
-
-// **VERIFIKASI UDAH DITERIMA BLOM DI DASHBOARD MEMBER
+// **CEK STATUS VERIFIKASI**
 router.get('/checkVerificationStatus/:user_id', (req, res) => {
     const { user_id } = req.params;
 
@@ -187,10 +203,19 @@ router.get('/checkVerificationStatus/:user_id', (req, res) => {
             return res.json({ status: 'DITOLAK', message: 'Anda ditolak, silahkan mendaftar ulang pada tahun berikutnya. Terima kasih.' });
         }
 
+        // Jika status_verifikasi PERPANJANG
+        if (statusVerifikasi === 'PERPANJANG') {
+            return res.json({ status: 'PERPANJANG', message: 'Perpanjang' });
+        }
+
+        // Jika status_verifikasi PERPANJANG
+        if (statusVerifikasi === 'PENDING PERPANJANG') {
+            return res.json({ status: 'PENDING PERPANJANG', message: 'PENDING PERPANJANG' });
+        }
+
         // Default response
         res.json({ status: 'UNKNOWN', message: 'Status verifikasi tidak diketahui.' });
     });
 });
-
 
 module.exports = router;
