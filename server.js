@@ -46,7 +46,7 @@ app.listen(port, () => {
     console.log(`Server running on http://localhost:${port}`);
 });
 
-// **GET ALL USERS (TESTING)**
+// **GET ALL USERS for member dashboard
 app.get('/users', (req, res) => {
     db.query('SELECT * FROM users', (err, results) => {
         if (err) {

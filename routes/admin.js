@@ -370,15 +370,17 @@ router.get('/pelatihan/:id', (req, res) => {
 
 // **POST Tambah Pelatihan Baru**
 router.post('/pelatihan/tambah', uploadPelatihan.single('banner'), (req, res) => {
-    const { judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge } = req.body;
+    const { kode, judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge } = req.body;
     const banner = req.file ? `/uploads/pelatihan/${req.file.filename}` : null;
 
-    if (!judul_pelatihan || !tanggal_pelatihan || !tanggal_berakhir || !deskripsi_pelatihan || !link || !narasumber || !banner || !badge) {
+    // Validasi semua field termasuk kode
+    if (!kode || !judul_pelatihan || !tanggal_pelatihan || !tanggal_berakhir || !deskripsi_pelatihan || !link || !narasumber || !banner || !badge) {
         return res.status(400).json({ message: 'Semua field harus diisi' });
     }
 
-    const sql = 'INSERT INTO pelatihan_member (judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, upload_banner, badge) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
-    db.query(sql, [judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, banner, badge], (err, result) => {
+    // Query SQL dengan field kode
+    const sql = 'INSERT INTO pelatihan_member (kode, judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, upload_banner, badge) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
+    db.query(sql, [kode, judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, banner, badge], (err, result) => {
         if (err) {
             console.error('❌ Error menambahkan pelatihan:', err);
             return res.status(500).json({ message: 'Gagal menambahkan pelatihan' });
@@ -390,18 +392,19 @@ router.post('/pelatihan/tambah', uploadPelatihan.single('banner'), (req, res) =>
 // **PUT Edit Pelatihan**
 router.put('/pelatihan/edit/:id', uploadPelatihan.single('banner'), (req, res) => {
     const { id } = req.params;
-    const { judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge } = req.body;
+    const { kode, judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge } = req.body;
     const banner = req.file ? `/uploads/pelatihan/${req.file.filename}` : null;
 
-    if (!judul_pelatihan || !tanggal_pelatihan || !tanggal_berakhir || !deskripsi_pelatihan || !link || !narasumber || !badge) {
+    // Validasi semua field termasuk kode
+    if (!kode || !judul_pelatihan || !tanggal_pelatihan || !tanggal_berakhir || !deskripsi_pelatihan || !link || !narasumber || !badge) {
         return res.status(400).json({ message: 'Semua field harus diisi' });
     }
 
     // Cek apakah ingin mengupdate banner
     let sql, values;
     if (banner) {
-        sql = 'UPDATE pelatihan_member SET judul_pelatihan = ?, tanggal_pelatihan = ?, tanggal_berakhir = ?, deskripsi_pelatihan = ?, link = ?, narasumber = ?, badge = ?, upload_banner = ? WHERE id = ?';
-        values = [judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge, banner, id];
+        sql = 'UPDATE pelatihan_member SET kode = ?, judul_pelatihan = ?, tanggal_pelatihan = ?, tanggal_berakhir = ?, deskripsi_pelatihan = ?, link = ?, narasumber = ?, badge = ?, upload_banner = ? WHERE id = ?';
+        values = [kode, judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge, banner, id];
 
         // Hapus banner lama jika ada
         db.query('SELECT upload_banner FROM pelatihan_member WHERE id = ?', [id], (err, results) => {
@@ -417,8 +420,8 @@ router.put('/pelatihan/edit/:id', uploadPelatihan.single('banner'), (req, res) =
             }
         });
     } else {
-        sql = 'UPDATE pelatihan_member SET judul_pelatihan = ?, tanggal_pelatihan = ?, tanggal_berakhir = ?, deskripsi_pelatihan = ?, link = ?, narasumber = ?, badge = ? WHERE id = ?';
-        values = [judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge, id];
+        sql = 'UPDATE pelatihan_member SET kode = ?, judul_pelatihan = ?, tanggal_pelatihan = ?, tanggal_berakhir = ?, deskripsi_pelatihan = ?, link = ?, narasumber = ?, badge = ? WHERE id = ?';
+        values = [kode, judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge, id];
     }
 
     db.query(sql, values, (err, result) => {

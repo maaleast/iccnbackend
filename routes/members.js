@@ -180,9 +180,132 @@ router.get('/pelatihan', (req, res) => {
             console.error('❌ Error mengambil data pelatihan:', err);
             return res.status(500).json({ message: 'Gagal mengambil data pelatihan' });
         }
-        res.json(results);
+
+        // Filter out sensitive fields (e.g., 'kode') from the results
+        const filteredResults = results.map(item => {
+            const { kode, ...rest } = item; // Exclude 'kode' from the response
+            return rest;
+        });
+
+        res.json(filteredResults);
     });
 });
+
+
+// Endpoint untuk menyelesaikan pelatihan
+router.post('/selesai-pelatihan', (req, res) => {
+    const { pelatihan_id, kode, user_id } = req.body;
+
+    // 1. Cek apakah kode pelatihan valid
+    db.query(
+        'SELECT * FROM pelatihan_member WHERE id = ? AND kode = ?',
+        [pelatihan_id, kode],
+        (err, pelatihan) => {
+            if (err) {
+                console.error('❌ Error query pelatihan:', err);
+                return res.status(500).json({ message: 'Gagal menyelesaikan pelatihan' });
+            }
+
+            if (pelatihan.length === 0) {
+                return res.status(400).json({ message: 'Kode pelatihan tidak valid' });
+            }
+
+            // 2. Ambil badge dari pelatihan
+            const badgePelatihan = pelatihan[0].badge;
+            if (!badgePelatihan) {
+                return res.status(400).json({ message: 'Badge tidak ditemukan untuk pelatihan ini' });
+            }
+
+            // 3. Update badge di table members berdasarkan user_id
+            db.query(
+                'SELECT badge FROM members WHERE user_id = ?', // Ubah id menjadi user_id
+                [user_id],
+                (err, member) => {
+                    if (err) {
+                        console.error('❌ Error query members:', err);
+                        return res.status(500).json({ message: 'Gagal menyelesaikan pelatihan' });
+                    }
+
+                    // Pastikan badges selalu berupa array
+                    let badges = member[0].badge || []; // Jika badge null/undefined, gunakan array kosong
+                    if (typeof badges === 'string') {
+                        try {
+                            badges = JSON.parse(badges); // Konversi string JSON ke array
+                        } catch (error) {
+                            console.error('❌ Error parsing badges:', error);
+                            badges = []; // Jika parsing gagal, gunakan array kosong
+                        }
+                    }
+
+                    // Tambahkan badge baru ke array
+                    badges.push({
+                        badge: badgePelatihan,
+                        pelatihan_id: pelatihan_id,
+                        tanggal_selesai: new Date().toISOString(),
+                    });
+
+                    // Update badge di database
+                    db.query(
+                        'UPDATE members SET badge = ? WHERE user_id = ?', // Ubah id menjadi user_id
+                        [JSON.stringify(badges), user_id], // Simpan sebagai JSON string
+                        (err, result) => {
+                            if (err) {
+                                console.error('❌ Error update members:', err);
+                                return res.status(500).json({ message: 'Gagal menyelesaikan pelatihan' });
+                            }
+
+                            // 4. Beri respons sukses
+                            res.json({ message: 'Pelatihan selesai! Badge telah ditambahkan.', badge: badgePelatihan });
+                        }
+                    );
+                }
+            );
+        }
+    );
+});
+
+module.exports = router;
+
+// Endpoint untuk mendapatkan badge berdasarkan user_id
+router.get('/badge/:user_id', (req, res) => {
+    const { user_id } = req.params;
+
+    // 1. Ambil data badge dari tabel members berdasarkan user_id
+    db.query(
+        'SELECT badge FROM members WHERE user_id = ?',
+        [user_id],
+        (err, result) => {
+            if (err) {
+                console.error('❌ Error query members:', err);
+                return res.status(500).json({ message: 'Gagal mengambil data badge' });
+            }
+
+            if (result.length === 0) {
+                return res.status(404).json({ message: 'User tidak ditemukan' });
+            }
+
+            // 2. Ambil field badge dari hasil query
+            const badges = result[0].badge;
+
+            // 3. Pastikan badges berupa array
+            let badgeList = [];
+            if (badges) {
+                try {
+                    // Jika badges adalah string JSON, parse ke array
+                    badgeList = typeof badges === 'string' ? JSON.parse(badges) : badges;
+                } catch (error) {
+                    console.error('❌ Error parsing badges:', error);
+                    return res.status(500).json({ message: 'Gagal memproses data badge' });
+                }
+            }
+
+            // 4. Beri respons dengan daftar badge
+            res.json({ user_id, badges: badgeList });
+        }
+    );
+});
+
+
 
 // **CEK STATUS VERIFIKASI**
 router.get('/checkVerificationStatus/:user_id', (req, res) => {
