@@ -2,6 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const path = require('path');
 const db = require('../db');
+const jwt = require('jsonwebtoken');
 
 const router = express.Router();
 
@@ -46,9 +47,10 @@ const upload = multer({
     }
 });
 
-//** NGECEK UDAH DAFTAR BELUM */
-router.post('/checkUserRole', (req, res) => {
-    const { user_id } = req.body;
+//** NGECEK STATUS ROLE */
+//** NGECEK STATUS ROLE */
+router.get('/checkUserRole', (req, res) => {
+    const { user_id } = req.query;
 
     if (!user_id) {
         return res.status(400).json({ message: 'User ID tidak ditemukan!' });
@@ -70,8 +72,13 @@ router.post('/checkUserRole', (req, res) => {
             return res.json({ role: 'member', message: 'Anda sudah menjadi member. Selamat datang!' });
         }
 
-        // Jika role bukan 'member', arahkan ke halaman pendaftaran
-        res.json({ role: userRole, message: 'Anda belum menjadi member. Silakan daftar terlebih dahulu.' });
+        // Jika role adalah 'admin', arahkan ke halaman admin
+        if (userRole === 'admin') {
+            return res.json({ role: 'admin', message: 'Anda adalah admin. Selamat datang!' });
+        }
+
+        // Jika role bukan 'member' atau 'admin', arahkan ke halaman pendaftaran
+        res.json({ role: null, message: 'Anda belum menjadi member. Silakan daftar terlebih dahulu.' });
     });
 });
 
@@ -113,12 +120,28 @@ router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'buk
                         return res.status(500).json({ message: 'Gagal memperbarui role pengguna', error: err });
                     }
 
-                    res.status(201).json({ 
-                        message: 'Pendaftaran member berhasil, menunggu verifikasi', 
-                        file_sk: fileSkPath, 
-                        bukti_pembayaran: buktiPembayaranPath, 
-                        logo: logoPath,
-                        masa_aktif: masaAktifFormatted 
+                    // Generate new JWT token with updated role
+                    db.query('SELECT * FROM users WHERE id = ?', [user_id], (err, results) => {
+                        if (err || results.length === 0) {
+                            console.error('Error saat mengambil data pengguna:', err);
+                            return res.status(500).json({ message: 'Gagal mengambil data pengguna', error: err });
+                        }
+
+                        const user = results[0];
+                        const token = jwt.sign(
+                            { id: user.id, username: user.username, role: user.role, is_verified: user.is_verified }, 
+                            process.env.JWT_SECRET, 
+                            { expiresIn: '1h' }
+                        );
+
+                        res.status(201).json({ 
+                            message: 'Pendaftaran member berhasil, menunggu verifikasi', 
+                            file_sk: fileSkPath, 
+                            bukti_pembayaran: buktiPembayaranPath, 
+                            logo: logoPath,
+                            masa_aktif: masaAktifFormatted,
+                            token: token // Send the new token to the client
+                        });
                     });
                 }
             );

@@ -150,38 +150,48 @@ module.exports = router;
 // KEUANGAN AKUNTAN
 // =========================================================
 
-// **🔹 Tambah Pemasukan/Pengeluaran**
+// Endpoint tambah transaksi
 router.post('/keuangan/tambah', async (req, res) => {
-    const { status, jumlah, deskripsi } = req.body;
+    const { status, jumlah, deskripsi, tanggal_waktu } = req.body;
 
-    if (!status || !jumlah || !deskripsi) {
+    // Validasi input
+    if (!status || !jumlah || !deskripsi || !tanggal_waktu) {
         return res.status(400).json({ message: 'Semua data harus diisi!' });
     }
 
     try {
-        let saldoTerakhir = await getLastBalance();
-        let saldoBaru = status === 'MASUK' 
-            ? saldoTerakhir + parseFloat(jumlah) 
-            : saldoTerakhir - parseFloat(jumlah);
+        // Ambil saldo terakhir
+        const saldoTerakhir = await getLastBalance();
 
+        // Hitung saldo baru berdasarkan status
+        let saldoBaru;
+        if (status === 'MASUK') {
+            saldoBaru = saldoTerakhir + parseFloat(jumlah);
+        } else if (status === 'KELUAR') {
+            saldoBaru = saldoTerakhir - parseFloat(jumlah);
+        } else {
+            return res.status(400).json({ message: 'Status tidak valid!' });
+        }
+
+        // Simpan data dalam format lokal (WIB)
         db.query(
-            'INSERT INTO admin_laporan_keuangan (status, jumlah, deskripsi, saldo_akhir) VALUES (?, ?, ?, ?)',
-            [status, jumlah, deskripsi, saldoBaru],
+            'INSERT INTO admin_laporan_keuangan (status, jumlah, deskripsi, tanggal_waktu, saldo_akhir) VALUES (?, ?, ?, ?, ?)',
+            [status, jumlah, deskripsi, tanggal_waktu, saldoBaru],
             (err) => {
                 if (err) {
-                    console.error('❌ Gagal menambah transaksi:', err);
+                    console.error('Gagal menambah transaksi:', err);
                     return res.status(500).json({ message: 'Gagal menambah transaksi' });
                 }
-                res.status(201).json({ message: 'Transaksi berhasil ditambahkan', saldo_akhir: saldoBaru });
+                res.status(201).json({ message: 'Transaksi berhasil ditambahkan' });
             }
         );
     } catch (error) {
-        console.error('❌ Error:', error);
-        res.status(500).json({ message: 'Gagal mengambil saldo terakhir' });
+        console.error('Error:', error);
+        res.status(500).json({ message: 'Gagal menambah transaksi' });
     }
 });
 
-// **🔹 Ambil Semua Data Keuangan**
+// *🔹 Ambil Semua Data Keuangan*
 router.get('/keuangan', (req, res) => {
     db.query('SELECT * FROM admin_laporan_keuangan ORDER BY tanggal_waktu DESC', (err, results) => {
         if (err) {
@@ -192,7 +202,7 @@ router.get('/keuangan', (req, res) => {
     });
 });
 
-// **🔹 Ambil Total Pendapatan Keseluruhan**
+// *🔹 Ambil Total Pendapatan Keseluruhan*
 router.get('/keuangan/total-pendapatan', (req, res) => {
     db.query('SELECT SUM(jumlah) AS total FROM admin_laporan_keuangan WHERE status = "MASUK"', (err, results) => {
         if (err) {
@@ -204,69 +214,90 @@ router.get('/keuangan/total-pendapatan', (req, res) => {
 });
 
 
-
-// **🔹 Edit Transaksi**
+// Endpoint edit transaksi
 router.put('/keuangan/edit/:id', async (req, res) => {
     const { id } = req.params;
-    const { jumlah, deskripsi } = req.body;
+    const { jumlah, deskripsi, tanggal_waktu } = req.body;
+
+    // Validasi input
+    if (!jumlah || !deskripsi || !tanggal_waktu) {
+        return res.status(400).json({ message: 'Semua data harus diisi!' });
+    }
 
     try {
-        // Dapatkan transaksi yang akan diupdate
+        // Ambil transaksi yang akan diupdate
         const [existing] = await db.promise().query(
-            'SELECT * FROM admin_laporan_keuangan WHERE id = ?', 
+            'SELECT * FROM admin_laporan_keuangan WHERE id = ?',
             [id]
         );
-        
-        if (!existing.length) return res.status(404).json({ message: 'Transaksi tidak ditemukan' });
-        
-        // Hitung ulang saldo
-        const saldoTerakhir = await getLastBalance();
-        const saldoBaru = existing[0].status === 'MASUK' 
-            ? saldoTerakhir - existing[0].jumlah + parseFloat(jumlah)
-            : saldoTerakhir + existing[0].jumlah - parseFloat(jumlah);
 
-        // Update transaksi
+        if (!existing.length) {
+            return res.status(404).json({ message: 'Transaksi tidak ditemukan' });
+        }
+
+        const transaksi = existing[0];
+
+        // Ambil saldo terakhir
+        const saldoTerakhir = await getLastBalance();
+
+        // Hitung ulang saldo berdasarkan perubahan
+        let saldoBaru;
+        if (transaksi.status === 'MASUK') {
+            saldoBaru = saldoTerakhir - transaksi.jumlah + parseFloat(jumlah);
+        } else {
+            saldoBaru = saldoTerakhir + transaksi.jumlah - parseFloat(jumlah);
+        }
+
+        // Update transaksi dengan tanggal_waktu dalam format lokal (WIB)
         await db.promise().query(
-            'UPDATE admin_laporan_keuangan SET jumlah = ?, deskripsi = ?, saldo_akhir = ? WHERE id = ?',
-            [jumlah, deskripsi, saldoBaru, id]
+            'UPDATE admin_laporan_keuangan SET jumlah = ?, deskripsi = ?, saldo_akhir = ?, tanggal_waktu = ? WHERE id = ?',
+            [jumlah, deskripsi, saldoBaru, tanggal_waktu, id]
         );
-        
-        res.json({ message: 'Transaksi updated', saldo_akhir: saldoBaru });
+
+        res.json({ message: 'Transaksi berhasil diupdate', saldo_akhir: saldoBaru });
     } catch (error) {
         console.error('❌ Error:', error);
         res.status(500).json({ message: 'Gagal update transaksi' });
     }
 });
 
-// **🔹 Hapus Transaksi**
 router.delete('/keuangan/delete/:id', async (req, res) => {
     const { id } = req.params;
-    
+
     try {
-        // Dapatkan transaksi yang akan dihapus
+        // Ambil transaksi yang akan dihapus
         const [existing] = await db.promise().query(
-            'SELECT * FROM admin_laporan_keuangan WHERE id = ?', 
+            'SELECT * FROM admin_laporan_keuangan WHERE id = ?',
             [id]
         );
-        
-        if (!existing.length) return res.status(404).json({ message: 'Transaksi tidak ditemukan' });
-        
-        // Hitung ulang saldo
+
+        if (!existing.length) {
+            return res.status(404).json({ message: 'Transaksi tidak ditemukan' });
+        }
+
+        const transaksi = existing[0];
+
+        // Ambil saldo terakhir
         const saldoTerakhir = await getLastBalance();
-        const saldoBaru = existing[0].status === 'MASUK' 
-            ? saldoTerakhir - existing[0].jumlah
-            : saldoTerakhir + existing[0].jumlah;
+
+        // Hitung ulang saldo setelah penghapusan
+        let saldoBaru;
+        if (transaksi.status === 'MASUK') {
+            saldoBaru = saldoTerakhir - transaksi.jumlah;
+        } else {
+            saldoBaru = saldoTerakhir + transaksi.jumlah;
+        }
 
         // Hapus transaksi
         await db.promise().query(
             'DELETE FROM admin_laporan_keuangan WHERE id = ?',
             [id]
         );
-        
-        res.json({ message: 'Transaksi deleted', saldo_akhir: saldoBaru });
+
+        res.json({ message: 'Transaksi berhasil dihapus', saldo_akhir: saldoBaru });
     } catch (error) {
         console.error('❌ Error:', error);
-        res.status(500).json({ message: 'Gagal hapus transaksi' });
+        res.status(500).json({ message: 'Gagal menghapus transaksi' });
     }
 });
 
@@ -310,8 +341,14 @@ router.get('/keuangan/bulan-ini', async (req, res) => {
 // Saldo Akhir
 router.get('/keuangan/saldo-akhir', async (req, res) => {
     try {
-        const saldoTerakhir = await getLastBalance();
-        res.json({ saldo_akhir: saldoTerakhir });
+        // Ambil total pendapatan dan pengeluaran
+        const [income] = await db.promise().query('SELECT SUM(jumlah) AS total FROM admin_laporan_keuangan WHERE status = "MASUK"');
+        const [expense] = await db.promise().query('SELECT SUM(jumlah) AS total FROM admin_laporan_keuangan WHERE status = "KELUAR"');
+
+        // Hitung saldo akhir
+        const saldoAkhir = (income[0].total || 0) - (expense[0].total || 0);
+
+        res.json({ saldo_akhir: saldoAkhir });
     } catch (error) {
         console.error('❌ Gagal mengambil saldo akhir:', error);
         res.status(500).json({ message: 'Gagal mengambil saldo akhir' });
