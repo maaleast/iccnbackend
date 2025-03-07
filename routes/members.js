@@ -366,4 +366,32 @@ router.get('/checkVerificationStatus/:user_id', (req, res) => {
     });
 });
 
+//Mengambil beberapa info member untuk setting member dashboard
+router.get('/member-info', (req, res) => {
+    const userId = req.query.user_id; // Ambil user_id dari query parameter
+
+    if (!userId) {
+        return res.status(400).json({ message: 'User ID tidak ditemukan' });
+    }
+
+    const query = `
+        SELECT tipe_keanggotaan, institusi, nama_pembayar, nomor_wa 
+        FROM members 
+        WHERE user_id = ?
+    `;
+
+    db.query(query, [userId], (err, results) => {
+        if (err) {
+            console.error('❌ Error mengambil data member:', err);
+            return res.status(500).json({ message: 'Gagal mengambil data member' });
+        }
+
+        if (results.length === 0) {
+            return res.status(404).json({ message: 'Data member tidak ditemukan' });
+        }
+
+        res.json(results[0]); // Mengembalikan data member
+    });
+});
+
 module.exports = router;

@@ -339,7 +339,21 @@ const uploadStoragePelatihan = multer.diskStorage({
     },
 });
 
-const uploadPelatihan = multer({ storage: uploadStoragePelatihan });
+//D-7
+const uploadPelatihan = multer({
+    storage: uploadStoragePelatihan,
+    fileFilter: (req, file, cb) => {
+        const fileTypes = /jpeg|jpg|png/;
+        const extName = fileTypes.test(path.extname(file.originalname).toLowerCase());
+        const mimeType = fileTypes.test(file.mimetype);
+
+        if (extName && mimeType) {
+            cb(null, true);
+        } else {
+            cb(new Error('Hanya file gambar yang diperbolehkan'));
+        }
+    }
+});
 
 // **GET Semua Data Pelatihan**
 router.get('/pelatihan', (req, res) => {
@@ -389,8 +403,8 @@ router.post('/pelatihan/tambah', uploadPelatihan.single('banner'), (req, res) =>
     });
 });
 
-// **PUT Edit Pelatihan**
-router.put('/pelatihan/edit/:id', uploadPelatihan.single('banner'), (req, res) => {
+// **PUT Edit Pelatihan** ===> D-7
+router.put('/pelatihan/edit/:id', uploadPelatihan.single('upload_banner'), (req, res) => {
     const { id } = req.params;
     const { kode, judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge } = req.body;
     const banner = req.file ? `/uploads/pelatihan/${req.file.filename}` : null;
@@ -427,7 +441,7 @@ router.put('/pelatihan/edit/:id', uploadPelatihan.single('banner'), (req, res) =
     db.query(sql, values, (err, result) => {
         if (err) {
             console.error('❌ Error mengedit pelatihan:', err);
-            return res.status(500).json({ message: 'Gagal mengedit pelatihan' });
+            return res.status(500).json({ message: 'Gagal mengedit pelatihan', error: err });
         }
         if (result.affectedRows === 0) {
             return res.status(404).json({ message: 'Pelatihan tidak ditemukan' });
