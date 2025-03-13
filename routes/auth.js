@@ -35,7 +35,7 @@ router.post('/register', async (req, res) => {
 
     db.query(
         'INSERT INTO users (username, email, password, verification_token, is_verified, role) VALUES (?, ?, ?, ?, ?, ?)',
-        [username, email, hashedPassword, verificationToken, false, ''],
+        [username, email, hashedPassword, verificationToken, false, null],
         async (err) => {
             if (err) {
                 console.error("❌ Error saat registrasi:", err);
