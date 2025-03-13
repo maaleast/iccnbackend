@@ -47,6 +47,31 @@ const upload = multer({
     }
 });
 
+async function generateUniqueIdentitas(tipe_keanggotaan) {
+    const tahun = new Date().getFullYear() % 100;
+    let prefix = tipe_keanggotaan === "Universitas" ? "UN" :
+                 tipe_keanggotaan === "Perusahaan" ? "PR" :
+                 tipe_keanggotaan === "Individu" ? "IN" : null;
+
+    if (!prefix) throw new Error("Tipe keanggotaan tidak valid!");
+
+    let counter = 1, identitas, isUnique = false;
+
+    while (!isUnique) {
+        identitas = `${tahun}${prefix}${String(counter).padStart(3, '0')}`;
+        
+        const [rows] = await db.promise().query(
+            'SELECT COUNT(*) as count FROM members WHERE no_identitas = ?',
+            [identitas]
+        );
+
+        if (rows[0].count === 0) isUnique = true;
+        else counter++;
+    }
+
+    return identitas;
+}
+
 //** NGECEK STATUS ROLE */
 //** NGECEK STATUS ROLE */
 router.get('/checkUserRole', (req, res) => {
@@ -83,70 +108,90 @@ router.get('/checkUserRole', (req, res) => {
 });
 
 // **REGISTER MEMBER**
-router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'bukti_pembayaran' }, { name: 'logo' }]), (req, res) => {
-    const { user_id, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama_pembayar, nominal_transfer, nomor_wa, nama_kuitansi } = req.body;
-    let { additional_members_info } = req.body;
+router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'bukti_pembayaran' }, { name: 'logo' }]), async (req, res) => {
+    try {
+        const { tipe_keanggotaan, institusi, website, email, alamat, wilayah, name, nominal_transfer, nomor_wa, nama_kuitansi } = req.body;
+        let { additional_members_info } = req.body;
 
-    if (!req.files || !req.files['file_sk'] || !req.files['bukti_pembayaran']) {
-        return res.status(400).json({ message: 'File SK dan Bukti Pembayaran harus diunggah!' });
-    }
+        if (!req.files || !req.files['file_sk'] || !req.files['bukti_pembayaran']) {
+            return res.status(400).json({ message: 'File SK dan Bukti Pembayaran harus diunggah!' });
+        }
 
-    const fileSkPath = `/uploads/file_sk/${req.files['file_sk'][0].filename}`;
-    const buktiPembayaranPath = `/uploads/bukti_pembayaran/${req.files['bukti_pembayaran'][0].filename}`;
-    const logoPath = req.files['logo'] ? `/uploads/${tipe_keanggotaan.toLowerCase()}/${req.files['logo'][0].filename}` : null;
-
-    additional_members_info = additional_members_info ? additional_members_info : null;
-
-    const tanggalSubmit = new Date();
-    const masaAktif = new Date(tanggalSubmit);
-    masaAktif.setFullYear(masaAktif.getFullYear() + 1);
-    const masaAktifFormatted = masaAktif.toISOString().split('T')[0];
-
-    db.query(
-        'INSERT INTO members (user_id, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama_pembayar, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, file_sk, bukti_pembayaran, logo, status_verifikasi, tanggal_submit, masa_aktif) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "PENDING", NOW(), ?)',
-        [user_id, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama_pembayar, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, fileSkPath, buktiPembayaranPath, logoPath, masaAktifFormatted],
-        (err, result) => {
+        // Ambil user_id berdasarkan email
+        db.query('SELECT id FROM users WHERE email = ?', [email], async (err, results) => {
             if (err) {
-                console.error('Error saat mendaftar member:', err);
-                return res.status(500).json({ message: 'Gagal mendaftar sebagai member', error: err });
+                console.error('Error saat mengambil user_id:', err);
+                return res.status(500).json({ message: 'Gagal mengambil user_id', error: err });
+            }
+            if (results.length === 0) {
+                return res.status(404).json({ message: 'User dengan email tersebut tidak ditemukan' });
             }
 
+            const user_id = results[0].id; // Ambil id dari hasil query
+
+            // Simpan path file yang diunggah
+            const fileSkPath = `/uploads/file_sk/${req.files['file_sk'][0].filename}`;
+            const buktiPembayaranPath = `/uploads/bukti_pembayaran/${req.files['bukti_pembayaran'][0].filename}`;
+            const logoPath = req.files['logo'] ? `/uploads/${tipe_keanggotaan.toLowerCase()}/${req.files['logo'][0].filename}` : null;
+
+            additional_members_info = additional_members_info ? additional_members_info : null;
+
+            const tanggalSubmit = new Date();
+            const masaAktif = new Date(tanggalSubmit);
+            masaAktif.setFullYear(masaAktif.getFullYear() + 1);
+            const masaAktifFormatted = masaAktif.toISOString().split('T')[0];
+
+            const no_identitas = await generateUniqueIdentitas(tipe_keanggotaan);
+
+            // Insert ke tabel members
             db.query(
-                'UPDATE users SET role = "member" WHERE id = ?',
-                [user_id],
+                'INSERT INTO members (user_id, no_identitas, tipe_keanggotaan, institusi, website, email, alamat, wilayah, name, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, file_sk, bukti_pembayaran, logo, status_verifikasi, tanggal_submit, masa_aktif) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "PENDING", NOW(), ?)',
+                [user_id, no_identitas, tipe_keanggotaan, institusi, website, email, alamat, wilayah, name, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, fileSkPath, buktiPembayaranPath, logoPath, masaAktifFormatted],
                 (err, result) => {
                     if (err) {
-                        console.error('Error saat memperbarui role pengguna:', err);
-                        return res.status(500).json({ message: 'Gagal memperbarui role pengguna', error: err });
+                        console.error('Error saat mendaftar member:', err);
+                        return res.status(500).json({ message: 'Gagal mendaftar sebagai member', error: err });
                     }
 
-                    // Generate new JWT token with updated role
-                    db.query('SELECT * FROM users WHERE id = ?', [user_id], (err, results) => {
-                        if (err || results.length === 0) {
-                            console.error('Error saat mengambil data pengguna:', err);
-                            return res.status(500).json({ message: 'Gagal mengambil data pengguna', error: err });
+                    // Update role pengguna menjadi 'member'
+                    db.query('UPDATE users SET role = "member" WHERE id = ?', [user_id], (err, result) => {
+                        if (err) {
+                            console.error('Error saat memperbarui role pengguna:', err);
+                            return res.status(500).json({ message: 'Gagal memperbarui role pengguna', error: err });
                         }
 
-                        const user = results[0];
-                        const token = jwt.sign(
-                            { id: user.id, username: user.username, role: user.role, is_verified: user.is_verified }, 
-                            process.env.JWT_SECRET, 
-                            { expiresIn: '1h' }
-                        );
+                        // Ambil data pengguna yang diperbarui
+                        db.query('SELECT * FROM users WHERE id = ?', [user_id], (err, results) => {
+                            if (err || results.length === 0) {
+                                console.error('Error saat mengambil data pengguna:', err);
+                                return res.status(500).json({ message: 'Gagal mengambil data pengguna', error: err });
+                            }
 
-                        res.status(201).json({ 
-                            message: 'Pendaftaran member berhasil, menunggu verifikasi', 
-                            file_sk: fileSkPath, 
-                            bukti_pembayaran: buktiPembayaranPath, 
-                            logo: logoPath,
-                            masa_aktif: masaAktifFormatted,
-                            token: token // Send the new token to the client
+                            const user = results[0];
+                            // const token = jwt.sign(
+                            //     { id: user.id, username: user.username, role: user.role, is_verified: user.is_verified }, 
+                            //     process.env.JWT_SECRET, 
+                            //     { expiresIn: '1h' }
+                            // );
+
+                            res.status(201).json({ 
+                                message: 'Pendaftaran member berhasil, menunggu verifikasi', 
+                                file_sk: fileSkPath, 
+                                bukti_pembayaran: buktiPembayaranPath, 
+                                logo: logoPath,
+                                masa_aktif: masaAktifFormatted,
+                                // token: token // Kirim token yang diperbarui ke client jika diperlukan
+                            });
                         });
                     });
                 }
             );
-        }
-    );
+        });
+
+    } catch (err) {
+        console.error('Error saat mendaftar member:', err);
+        res.status(500).json({ message: 'Gagal mendaftar sebagai member', error: err });
+    }
 });
 
 // **REQUEST PERPANJANG MEMBER**
@@ -454,7 +499,7 @@ router.get('/member-info', (req, res) => {
     }
 
     const query = `
-        SELECT tipe_keanggotaan, institusi, nama_pembayar, nomor_wa 
+        SELECT tipe_keanggotaan, institusi, name, nomor_wa 
         FROM members 
         WHERE user_id = ?
     `;
