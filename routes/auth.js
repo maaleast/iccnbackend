@@ -5,6 +5,9 @@ const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const { v4: uuidv4 } = require('uuid');
 require('dotenv').config();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
 const router = express.Router();
 
@@ -18,6 +21,65 @@ const transporter = nodemailer.createTransport({
         pass: process.env.SMTP_PASSWORD
     }
 });
+
+// Fungsi untuk memastikan direktori ada
+const ensureDirExists = (dir) => {
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+};
+
+// Konfigurasi Multer
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        let uploadPath = path.join(__dirname, '../uploads');
+
+        if (file.fieldname === 'file_sk') {
+            uploadPath = path.join(uploadPath, 'file_sk');
+        } else if (file.fieldname === 'bukti_pembayaran') {
+            uploadPath = path.join(uploadPath, 'bukti_pembayaran');
+        } else if (file.fieldname === 'logo') {
+            // Pastikan tipe_keanggotaan ada dalam request
+            const tipeKeanggotaan = req.body.userTypen ? req.body.userType.toLowerCase().replace(/\s+/g, '_') : 'default';
+            uploadPath = path.join(uploadPath, tipeKeanggotaan, 'logo');
+        }
+
+        ensureDirExists(uploadPath);
+        cb(null, uploadPath);
+    },
+    filename: (req, file, cb) => {
+        cb(null, Date.now() + '-' + file.originalname);
+    }
+});
+
+// upload dengan multer
+const upload = multer({
+    storage: storage,
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        const allowedTypes = ['image/jpeg', 'image/png', 'application/pdf'];
+        if (!allowedTypes.includes(file.mimetype)) {
+            return cb(new Error('Format file tidak didukung!'));
+        }
+        cb(null, true);
+    }
+});
+
+// Generate Unique ID
+async function generateUniqueIdentitas(userType) {
+    const tahun = new Date().getFullYear() % 100;
+    const prefixMap = { Universitas: "UN", Perusahaan: "PR", Individu: "IN", Mahasiswa: "MA" };
+    const prefix = prefixMap[userType];
+    if (!prefix) throw new Error("Tipe keanggotaan tidak valid!");
+
+    const [rows] = await db.promise().query(
+        'SELECT MAX(CAST(SUBSTRING(no_identitas, 5, 3) AS UNSIGNED)) AS maxCounter FROM members WHERE no_identitas LIKE ?',
+        [`${tahun}${prefix}%`]
+    );
+
+    const counter = (rows[0].maxCounter || 0) + 1;
+    return `${tahun}${prefix}${String(counter).padStart(3, '0')}`;
+}
 
 // **REGISTER USER**
 router.post('/register', async (req, res) => {
@@ -57,6 +119,98 @@ router.post('/register', async (req, res) => {
             }
         }
     );
+});
+
+// 📌 REGISTER MEMBER
+router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'bukti_pembayaran' }, { name: 'logo' }]), async (req, res) => {
+    try {
+        console.log("🔹 Register-Member route hit");
+        console.log("🛠 Body:", req.body);
+        console.log("🛠 Files:", req.files);
+
+
+        const { username, email, password, userType, institutionName, websiteLink, address, region, personalName, transferAmount, whatsappGroupNumber, receiptName } = req.body;
+        let { additional_members_info } = req.body;
+
+        // 🔍 Validasi Input
+        if (!username || !email || !password || !userType || !transferAmount) {
+            return res.status(400).json({ message: 'Semua field wajib diisi!' });
+        }
+
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({ message: 'Format email tidak valid!' });
+        }
+
+        const waRegex = /^[0-9]+$/;
+        if (whatsappGroupNumber && !waRegex.test(whatsappGroupNumber)) {
+            return res.status(400).json({ message: 'Nomor WA hanya boleh berisi angka!' });
+        }
+
+        // 🔍 Cek apakah email sudah terdaftar
+        const [existingUsers] = await db.promise().query('SELECT id FROM users WHERE email = ?', [email]);
+        if (existingUsers.length > 0) {
+            return res.status(400).json({ message: 'Email sudah terdaftar!' });
+        }
+
+        // 🔑 Hash Password
+        const hashedPassword = await bcrypt.hash(password, 12);
+        const verificationToken = uuidv4();
+
+        // 🔍 Cek apakah file wajib diunggah
+        if (!req.files || !req.files['file_sk'] || !req.files['bukti_pembayaran']) {
+            return res.status(400).json({ message: 'File SK dan Bukti Pembayaran harus diunggah!' });
+        }
+
+        const fileSkPath = `/uploads/file_sk/${req.files['file_sk'][0].filename}`;
+        const buktiPembayaranPath = `/uploads/bukti_pembayaran/${req.files['bukti_pembayaran'][0].filename}`;
+
+        let logoPath = null;
+        if (req.files['logo']) {
+            const userTypeDir = userType.toLowerCase().replace(/\s+/g, '_');
+            logoPath = `/uploads/${userTypeDir}/logo/${req.files['logo'][0].filename}`;
+        }
+
+        additional_members_info = additional_members_info || null;
+        const no_identitas = await generateUniqueIdentitas(userType);
+
+        const tanggalSubmit = new Date();
+        const masaAktif = new Date(tanggalSubmit);
+        masaAktif.setFullYear(masaAktif.getFullYear() + 1);
+        const masaAktifFormatted = masaAktif.toISOString().split('T')[0];
+
+        // 🔥 Transaksi Database untuk menghindari corrupt data
+        await db.promise().beginTransaction();
+
+        // Insert ke table users
+        const [userResult] = await db.promise().query(
+            'INSERT INTO users (username, email, password, verification_token, is_verified, role) VALUES (?, ?, ?, ?, ?, ?)',
+            [username, email, hashedPassword, verificationToken, false, 'member']
+        );
+
+        const user_id = userResult.insertId;
+
+        // Insert ke table members
+        await db.promise().query(
+            'INSERT INTO members (user_id, no_identitas, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, file_sk, bukti_pembayaran, logo, status_verifikasi, tanggal_submit, masa_aktif) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "PENDING", NOW(), ?)',
+            [user_id, no_identitas, userType, institutionName, websiteLink, email, address, region, personalName, transferAmount, whatsappGroupNumber, receiptName, additional_members_info, fileSkPath, buktiPembayaranPath, logoPath, masaAktifFormatted]
+        );
+
+        await db.promise().commit();
+
+        res.status(201).json({
+            message: 'Pendaftaran member berhasil, menunggu verifikasi',
+            file_sk: fileSkPath,
+            bukti_pembayaran: buktiPembayaranPath,
+            logo: logoPath,
+            masa_aktif: masaAktifFormatted
+        });
+
+    } catch (error) {
+        await db.promise().rollback();
+        console.error('❌ Error saat registrasi:', error);
+        res.status(500).json({ message: 'Gagal mendaftar', error });
+    }
 });
 
 // **VERIFIKASI EMAIL**
