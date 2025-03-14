@@ -259,6 +259,62 @@ router.get('/pelatihan', (req, res) => {
     });
 });
 
+//endpoint cek sudah terdaftar atau belum
+router.post('/checkRegistrationStatus', (req, res) => {
+    const { member_id, pelatihan_id } = req.body;
+
+    db.query(
+        'SELECT * FROM peserta_pelatihan WHERE member_id = ? AND pelatihan_id = ?',
+        [member_id, pelatihan_id],
+        (err, results) => {
+            if (err) {
+                console.error('Error checking registration status:', err);
+                return res.status(500).json({ error: 'Internal server error' });
+            }
+
+            if (results.length > 0) {
+                res.json({ isRegistered: true });
+            } else {
+                res.json({ isRegistered: false });
+            }
+        }
+    );
+});
+
+// enspoint untuk mendaftar pelatihan
+router.post('/mendaftar-pelatihan', (req, res) => {
+    const { pelatihan_id, member_id } = req.body;
+
+    db.query(
+        'SELECT * FROM pelatihan_member WHERE id = ?',
+        [pelatihan_id],
+        (err, results) => {
+            if (err) {
+                console.error('❌ Error query pelatihan:', err);
+                return res.status(500).json({ message: 'Gagal mendaftar pelatihan' });
+            }
+
+            if (results.length === 0) {
+                return res.status(404).json({ message: 'Pelatihan tidak ditemukan' });
+            }
+
+            const { id, ...pelatihan } = results[0]; // Exclude 'kode' from the response
+
+            db.query(
+                'INSERT INTO peserta_pelatihan (pelatihan_id, member_id) VALUES (?, ?)',
+                [pelatihan_id, member_id],
+                (err) => {
+                    if (err) {
+                        console.error('❌ Error mendaftar pelatihan:', err);
+                        return res.status(500).json({ message: 'Gagal mendaftar pelatihan' });
+                    }
+
+                    res.json({ message: 'Berhasil mendaftar pelatihan', pelatihan });
+                }
+            );
+        }
+    );
+});
 
 // Endpoint untuk menyelesaikan pelatihan
 router.post('/selesai-pelatihan', (req, res) => {
