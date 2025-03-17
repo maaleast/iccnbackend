@@ -196,15 +196,31 @@ router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'buk
             [user_id, no_identitas, userType, institutionName, websiteLink, email, address, region, personalName, transferAmount, whatsappGroupNumber, receiptName, additional_members_info, fileSkPath, buktiPembayaranPath, logoPath, masaAktifFormatted]
         );
 
-        await db.promise().commit();
+        // 🔹 Kirim Email Verifikasi
+        try {
+            await transporter.sendMail({
+                from: process.env.SMTP_EMAIL,
+                to: email,
+                subject: 'Verifikasi Akun ICCN',
+                html: `<p>Terima kasih telah mendaftar sebagai member ICCN. Klik <a href="${process.env.BASE_URL}/auth/verify?token=${verificationToken}">di sini</a> untuk verifikasi akun Anda.</p>`
+            });
 
-        res.status(201).json({
-            message: 'Pendaftaran member berhasil, menunggu verifikasi',
-            file_sk: fileSkPath,
-            bukti_pembayaran: buktiPembayaranPath,
-            logo: logoPath,
-            masa_aktif: masaAktifFormatted
-        });
+            await db.promise().commit();
+
+            res.status(201).json({
+                message: 'Pendaftaran member berhasil! Silakan cek email untuk verifikasi.',
+                file_sk: fileSkPath,
+                bukti_pembayaran: buktiPembayaranPath,
+                logo: logoPath,
+                masa_aktif: masaAktifFormatted
+            });
+
+        } catch (emailError) {
+            await db.promise().rollback(); // Rollback jika gagal kirim email
+            console.error('❌ Gagal mengirim email:', emailError);
+            res.status(500).json({ message: 'Gagal mengirim email verifikasi, coba lagi nanti.' });
+        }
+
 
     } catch (error) {
         await db.promise().rollback();
