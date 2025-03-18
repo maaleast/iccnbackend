@@ -72,13 +72,18 @@ async function generateUniqueIdentitas(userType) {
     const prefix = prefixMap[userType];
     if (!prefix) throw new Error("Tipe keanggotaan tidak valid!");
 
-    const [rows] = await db.promise().query(
-        'SELECT MAX(CAST(SUBSTRING(no_identitas, 5, 3) AS UNSIGNED)) AS maxCounter FROM members WHERE no_identitas LIKE ?',
-        [`${tahun}${prefix}%`]
-    );
+    try {
+        const [rows] = await db.promise().query(
+            'SELECT MAX(CAST(SUBSTRING(no_identitas, 6, 3) AS UNSIGNED)) AS maxCounter FROM members WHERE no_identitas LIKE ?',
+            [`${tahun}.${prefix}.%`]
+        );
 
-    const counter = (rows[0].maxCounter || 0) + 1;
-    return `${tahun}${prefix}${String(counter).padStart(3, '0')}`;
+        const counter = (rows[0].maxCounter || 0) + 1;
+        return `${tahun}.${prefix}.${String(counter).padStart(3, '0')}`;
+    } catch (error) {
+        console.error("Error generating unique identitas:", error);
+        throw new Error("Gagal menghasilkan no_identitas");
+    }
 }
 
 // **REGISTER USER**
