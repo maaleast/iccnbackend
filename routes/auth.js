@@ -79,7 +79,7 @@ async function generateUniqueIdentitas(userType) {
         );
 
         const counter = (rows[0].maxCounter || 0) + 1;
-        return `${tahun}.${prefix}.${String(counter).padStart(3, '0')}`;
+        return `${tahun}.${prefix}${String(counter).padStart(3, '0')}.01`;
     } catch (error) {
         console.error("Error generating unique identitas:", error);
         throw new Error("Gagal menghasilkan no_identitas");
