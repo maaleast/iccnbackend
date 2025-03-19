@@ -292,35 +292,99 @@ router.post('/checkRegistrationStatus', (req, res) => {
 router.post('/mendaftar-pelatihan', (req, res) => {
     const { pelatihan_id, member_id } = req.body;
 
-    db.query(
-        'SELECT * FROM pelatihan_member WHERE id = ?',
-        [pelatihan_id],
-        (err, results) => {
+    db.beginTransaction(err => {
+        if (err) {
+            console.error('❌ Error starting transaction:', err);
+            return res.status(500).json({ message: 'Failed to start transaction' });
+        }
+
+        // 1. Cek apakah pelatihan ada
+        db.query('SELECT * FROM pelatihan_member WHERE id = ?', [pelatihan_id], (err, pelatihanResults) => {
             if (err) {
-                console.error('❌ Error query pelatihan:', err);
-                return res.status(500).json({ message: 'Gagal mendaftar pelatihan' });
+                console.error('❌ Query failed:', err);
+                return db.rollback(() => res.status(500).json({ message: 'Query failed', error: err }));
+            }
+            if (pelatihanResults.length === 0) {
+                return db.rollback(() => res.status(404).json({ message: 'Pelatihan tidak ditemukan' }));
             }
 
-            if (results.length === 0) {
-                return res.status(404).json({ message: 'Pelatihan tidak ditemukan' });
-            }
+            const pelatihan = pelatihanResults[0];
 
-            const { id, ...pelatihan } = results[0]; // Exclude 'kode' from the response
+            // 2. Cek apakah member ada di database
+            db.query('SELECT no_identitas, badge FROM members WHERE id = ?', [member_id], (err, memberResults) => {
+                if (err) {
+                    console.error('❌ Query failed:', err);
+                    return db.rollback(() => res.status(500).json({ message: 'Query failed', error: err }));
+                }
+                if (memberResults.length === 0) {
+                    return db.rollback(() => res.status(404).json({ message: 'Member tidak ditemukan' }));
+                }
 
-            db.query(
-                'INSERT INTO peserta_pelatihan (pelatihan_id, member_id) VALUES (?, ?)',
-                [pelatihan_id, member_id],
-                (err) => {
+                const member = memberResults[0];
+                const noIdentitas = member.no_identitas;
+                const tahunKey = noIdentitas.split('.').pop();
+                let badgeData = {};
+
+                try {
+                    if (typeof member.badge === 'string' && member.badge.trim() !== '') {
+                        const parsedBadge = JSON.parse(member.badge);
+                        if (parsedBadge && typeof parsedBadge === 'object' && !Array.isArray(parsedBadge)) {
+                            badgeData = parsedBadge; // Gunakan badge dari DB jika valid
+                        }
+                    }
+                } catch (parseError) {
+                    console.error('❌ Error parsing badge data:', parseError, 'Raw badge data:', member.badge);
+                    return db.rollback(() => res.status(500).json({ message: 'Gagal memproses data badge', rawData: member.badge }));
+                }
+
+                // Pastikan `badgeData[tahunKey]` ada
+                if (!badgeData[tahunKey]) {
+                    badgeData[tahunKey] = {};
+                }
+
+                const existingEntries = Object.values(badgeData[tahunKey]).map(p => p.pelatihan_id);
+                if (existingEntries.includes(pelatihan_id)) {
+                    return db.rollback(() => res.status(400).json({ message: 'Member sudah terdaftar di pelatihan ini' }));
+                }
+
+                // 3. Tambahkan pelatihan ke dalam data badge
+                const newIndex = Object.keys(badgeData[tahunKey]).length;
+                badgeData[tahunKey][newIndex] = {
+                    pelatihan_id: pelatihan.id,
+                    judul_pelatihan: pelatihan.judul_pelatihan,
+                    deskripsi_pelatihan: pelatihan.deskripsi_pelatihan,
+                    narasumber: pelatihan.narasumber,
+                    badge: pelatihan.badge,
+                    status: "Ongoing"
+                };
+
+                // 4. Simpan pendaftaran ke peserta_pelatihan
+                db.query('INSERT INTO peserta_pelatihan (pelatihan_id, member_id) VALUES (?, ?)', [pelatihan_id, member_id], (err) => {
                     if (err) {
-                        console.error('❌ Error mendaftar pelatihan:', err);
-                        return res.status(500).json({ message: 'Gagal mendaftar pelatihan' });
+                        console.error('❌ Error inserting peserta_pelatihan:', err);
+                        return db.rollback(() => res.status(500).json({ message: 'Gagal mendaftarkan pelatihan', error: err }));
                     }
 
-                    res.json({ message: 'Berhasil mendaftar pelatihan', pelatihan });
-                }
-            );
-        }
-    );
+                    // 5. Update badge di tabel members
+                    db.query('UPDATE members SET badge = ? WHERE id = ?', [JSON.stringify(badgeData), member_id], (err) => {
+                        if (err) {
+                            console.error('❌ Error updating badge:', err);
+                            return db.rollback(() => res.status(500).json({ message: 'Gagal memperbarui badge', error: err }));
+                        }
+
+                        // 6. Commit transaksi
+                        db.commit(err => {
+                            if (err) {
+                                console.error('❌ Error committing transaction:', err);
+                                return db.rollback(() => res.status(500).json({ message: 'Gagal menyimpan perubahan', error: err }));
+                            }
+                            res.json({ message: 'Berhasil mendaftar pelatihan', badge: badgeData });
+                        });
+                    });
+                });
+            });
+        });
+    });
 });
 
 // Endpoint untuk menyelesaikan pelatihan
@@ -435,8 +499,6 @@ router.get('/badge/:user_id', (req, res) => {
         }
     );
 });
-
-
 
 // **CEK STATUS VERIFIKASI**
 router.get('/checkVerificationStatus/:user_id', (req, res) => {
