@@ -68,17 +68,23 @@ const upload = multer({
 // Generate Unique ID
 async function generateUniqueIdentitas(userType) {
     const tahun = new Date().getFullYear() % 100;
-    const prefixMap = { Universitas: "UN", Perusahaan: "PR", Individu: "IN", Mahasiswa: "MA" };
+    const prefixMap = { Universitas: "UI", Perusahaan: "PR", Individu: "IN", Mahasiswa: "MA" };
     const prefix = prefixMap[userType];
+
     if (!prefix) throw new Error("Tipe keanggotaan tidak valid!");
 
     try {
         const [rows] = await db.promise().query(
-            'SELECT MAX(CAST(SUBSTRING(no_identitas, 6, 3) AS UNSIGNED)) AS maxCounter FROM members WHERE no_identitas LIKE ?',
-            [`${tahun}.${prefix}.%`]
+            `SELECT MAX(CAST(SUBSTRING(no_identitas, 6, 3) AS UNSIGNED)) AS maxCounter 
+             FROM members 
+             WHERE no_identitas LIKE ?`,
+            [`${tahun}.${prefix}%`]
         );
 
-        const counter = (rows[0].maxCounter || 0) + 1;
+        // Ambil nilai maxCounter dan tambahkan 1 jika ada, atau mulai dari 1
+        const counter = (rows[0]?.maxCounter || 0) + 1;
+
+        // Format identitas baru
         return `${tahun}.${prefix}${String(counter).padStart(3, '0')}.01`;
     } catch (error) {
         console.error("Error generating unique identitas:", error);
