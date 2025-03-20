@@ -186,6 +186,7 @@ router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'buk
                                 bukti_pembayaran: buktiPembayaranPath, 
                                 logo: logoPath,
                                 masa_aktif: masaAktifFormatted,
+                                no_identitas: no_identitas // Pastikan ini ditambahkan
                             });
                         } catch (error) {
                             console.error('Error saat mencatat pendapatan:', error);
@@ -223,6 +224,9 @@ router.post('/request-perpanjang', upload.single('bukti_pembayaran_perpanjang'),
         }
     );
 });
+
+
+
 
 // **VERIFIKASI MEMBER (ADMIN)**
 router.put('/verify-member/:member_id', (req, res) => {
