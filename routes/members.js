@@ -359,7 +359,7 @@ router.post('/mendaftar-pelatihan', (req, res) => {
                     deskripsi_pelatihan: pelatihan.deskripsi_pelatihan,
                     narasumber: pelatihan.narasumber,
                     badge: pelatihan.badge,
-                    status: "Ongoing"
+                    status: "ongoing"
                 };
 
                 // 4. Simpan pendaftaran ke peserta_pelatihan
