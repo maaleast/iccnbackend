@@ -285,26 +285,53 @@ const getLaporanBulanIni = async () => {
     });
 };
 
+// *🔹 Ambil Laporan Bulan Ini*
 router.get('/keuangan/bulan-ini', async (req, res) => {
     try {
-        const laporanBulanIni = await getLaporanBulanIni();
-        res.json(laporanBulanIni);
+        const currentDate = new Date();
+        const year = currentDate.getFullYear();
+        const month = currentDate.getMonth() + 1; // Bulan dimulai dari 1
+
+        // Query untuk pendapatan
+        const [pendapatanResult] = await db.promise().query(
+            `SELECT SUM(jumlah) AS total_pendapatan 
+             FROM admin_laporan_keuangan 
+             WHERE status = 'MASUK' 
+               AND YEAR(tanggal_waktu) = ? 
+               AND MONTH(tanggal_waktu) = ?`,
+            [year, month]
+        );
+
+        // Query untuk pengeluaran
+        const [pengeluaranResult] = await db.promise().query(
+            `SELECT SUM(jumlah) AS total_pengeluaran 
+             FROM admin_laporan_keuangan 
+             WHERE status = 'KELUAR' 
+               AND YEAR(tanggal_waktu) = ? 
+               AND MONTH(tanggal_waktu) = ?`,
+            [year, month]
+        );
+
+        res.json({
+            total_pendapatan: pendapatanResult[0].total_pendapatan || 0,
+            total_pengeluaran: pengeluaranResult[0].total_pengeluaran || 0
+        });
     } catch (error) {
+        console.error('Error mengambil laporan bulan ini:', error);
         res.status(500).json({ message: 'Gagal mengambil laporan bulan ini' });
     }
 });
 
 
 // Saldo Akhir
+// Endpoint untuk mengambil saldo akhir
 router.get('/keuangan/saldo-akhir', async (req, res) => {
     try {
-        // Ambil total pendapatan dan pengeluaran
-        const [income] = await db.promise().query('SELECT SUM(jumlah) AS total FROM admin_laporan_keuangan WHERE status = "MASUK"');
-        const [expense] = await db.promise().query('SELECT SUM(jumlah) AS total FROM admin_laporan_keuangan WHERE status = "KELUAR"');
+        const [result] = await db.promise().query(
+            'SELECT saldo_akhir FROM admin_laporan_keuangan ORDER BY id DESC LIMIT 1'
+        );
 
-        // Hitung saldo akhir
-        const saldoAkhir = (income[0].total || 0) - (expense[0].total || 0);
-
+        const saldoAkhir = result.length ? result[0].saldo_akhir : 0;
         res.json({ saldo_akhir: saldoAkhir });
     } catch (error) {
         console.error('❌ Gagal mengambil saldo akhir:', error);
