@@ -68,17 +68,28 @@ const upload = multer({
 // Generate Unique ID
 async function generateUniqueIdentitas(userType) {
     const tahun = new Date().getFullYear() % 100;
-    const prefixMap = { Universitas: "UN", Perusahaan: "PR", Individu: "IN", Mahasiswa: "MA" };
+    const prefixMap = { Universitas: "UI", Perusahaan: "PR", Individu: "IN", Mahasiswa: "MA" };
     const prefix = prefixMap[userType];
+
     if (!prefix) throw new Error("Tipe keanggotaan tidak valid!");
 
-    const [rows] = await db.promise().query(
-        'SELECT MAX(CAST(SUBSTRING(no_identitas, 5, 3) AS UNSIGNED)) AS maxCounter FROM members WHERE no_identitas LIKE ?',
-        [`${tahun}${prefix}%`]
-    );
+    try {
+        const [rows] = await db.promise().query(
+            `SELECT MAX(CAST(SUBSTRING(no_identitas, 6, 3) AS UNSIGNED)) AS maxCounter 
+             FROM members 
+             WHERE no_identitas LIKE ?`,
+            [`${tahun}.${prefix}%`]
+        );
 
-    const counter = (rows[0].maxCounter || 0) + 1;
-    return `${tahun}${prefix}${String(counter).padStart(3, '0')}`;
+        // Ambil nilai maxCounter dan tambahkan 1 jika ada, atau mulai dari 1
+        const counter = (rows[0]?.maxCounter || 0) + 1;
+
+        // Format identitas baru
+        return `${tahun}.${prefix}${String(counter).padStart(3, '0')}.01`;
+    } catch (error) {
+        console.error("Error generating unique identitas:", error);
+        throw new Error("Gagal menghasilkan no_identitas");
+    }
 }
 
 // **REGISTER USER**
@@ -192,19 +203,35 @@ router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'buk
 
         // Insert ke table members
         await db.promise().query(
-            'INSERT INTO members (user_id, no_identitas, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, file_sk, bukti_pembayaran, logo, status_verifikasi, tanggal_submit, masa_aktif) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "PENDING", NOW(), ?)',
-            [user_id, no_identitas, userType, institutionName, websiteLink, email, address, region, personalName, transferAmount, whatsappGroupNumber, receiptName, additional_members_info, fileSkPath, buktiPembayaranPath, logoPath, masaAktifFormatted]
+            'INSERT INTO members (user_id, no_identitas, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, file_sk, bukti_pembayaran, logo, status_verifikasi, tanggal_submit, masa_aktif, badge) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "PENDING", NOW(), ?, ?)',
+            [user_id, no_identitas, userType, institutionName, websiteLink, email, address, region, personalName, transferAmount, whatsappGroupNumber, receiptName, additional_members_info, fileSkPath, buktiPembayaranPath, logoPath, masaAktifFormatted, '{}']
         );
 
-        await db.promise().commit();
+        // 🔹 Kirim Email Verifikasi
+        try {
+            await transporter.sendMail({
+                from: process.env.SMTP_EMAIL,
+                to: email,
+                subject: 'Verifikasi Akun ICCN',
+                html: `<p>Terima kasih telah mendaftar sebagai member ICCN. Klik <a href="${process.env.BASE_URL}/auth/verify?token=${verificationToken}">di sini</a> untuk verifikasi akun Anda.</p>`
+            });
 
-        res.status(201).json({
-            message: 'Pendaftaran member berhasil, menunggu verifikasi',
-            file_sk: fileSkPath,
-            bukti_pembayaran: buktiPembayaranPath,
-            logo: logoPath,
-            masa_aktif: masaAktifFormatted
-        });
+            await db.promise().commit();
+
+            res.status(201).json({
+                message: 'Pendaftaran member berhasil! Silakan cek email untuk verifikasi.',
+                file_sk: fileSkPath,
+                bukti_pembayaran: buktiPembayaranPath,
+                logo: logoPath,
+                masa_aktif: masaAktifFormatted
+            });
+
+        } catch (emailError) {
+            await db.promise().rollback(); // Rollback jika gagal kirim email
+            console.error('❌ Gagal mengirim email:', emailError);
+            res.status(500).json({ message: 'Gagal mengirim email verifikasi, coba lagi nanti.' });
+        }
+
 
     } catch (error) {
         await db.promise().rollback();
@@ -275,7 +302,15 @@ router.post('/login', (req, res) => {
         return res.status(400).json({ message: 'Username dan password harus diisi' });
     }
 
-    db.query('SELECT * FROM users WHERE username = ?', [username], async (err, results) => {
+    // 🔹 Cari user dan member_id dalam satu query
+    const query = `
+        SELECT users.*, members.id AS member_id
+        FROM users
+        LEFT JOIN members ON users.id = members.user_id
+        WHERE users.username = ?
+    `;
+
+    db.query(query, [username], async (err, results) => {
         if (err || results.length === 0) {
             console.error("❌ Username atau password salah");
             return res.status(401).json({ message: 'Username atau password salah' });
@@ -294,9 +329,16 @@ router.post('/login', (req, res) => {
             return res.status(401).json({ message: 'Username atau password salah' });
         }
 
-        // 🔹 Token JWT menyimpan ID, tapi ID tidak dikirim langsung dalam response JSON
+        // 🔹 Tambahkan `member_id` ke dalam token JWT
         const token = jwt.sign(
-            { id: user.id, username: user.username, role: user.role, is_verified: user.is_verified }, 
+            { 
+                id: user.id, 
+                username: user.username, 
+                role: user.role, 
+                is_verified: user.is_verified, 
+                member_id: user.member_id,
+                no_identitas: user.no_identitas
+            }, 
             process.env.JWT_SECRET, 
             { expiresIn: '1h' }
         );
