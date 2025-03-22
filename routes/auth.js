@@ -306,12 +306,11 @@ router.post('/login', (req, res) => {
         return res.status(400).json({ message: 'Username dan password harus diisi' });
     }
 
-    // 🔹 Cari user dan member_id dalam satu query
+    // 🔹 Cari user dalam database
     const query = `
-        SELECT users.*, members.id AS member_id
+        SELECT id, username, role, is_verified, password
         FROM users
-        LEFT JOIN members ON users.id = members.user_id
-        WHERE users.username = ?
+        WHERE username = ?
     `;
 
     db.query(query, [username], async (err, results) => {
@@ -333,15 +332,12 @@ router.post('/login', (req, res) => {
             return res.status(401).json({ message: 'Username atau password salah' });
         }
 
-        // 🔹 Tambahkan `member_id` ke dalam token JWT
+        // 🔹 Hanya menyertakan id, role, dan is_verified dalam token JWT
         const token = jwt.sign(
             { 
                 id: user.id, 
-                username: user.username, 
                 role: user.role, 
-                is_verified: user.is_verified, 
-                member_id: user.member_id,
-                no_identitas: user.no_identitas
+                is_verified: user.is_verified 
             }, 
             process.env.JWT_SECRET, 
             { expiresIn: '1h' }
