@@ -439,4 +439,63 @@ router.put("/peserta/:id/kirim", async (req, res) => {
     }
 });
 
+// update status di badge jika pelatihan tidak selesai
+router.put("/update-status/uncompleted", async (req, res) => {
+    try {
+        console.log("📥 Data diterima di backend:", req.body);
+
+        const { idMember, pelatihanId } = req.body;
+        const memberId = idMember;
+
+        if (!memberId || !pelatihanId) {
+            return res.status(400).json({ message: "memberId atau pelatihanId tidak boleh kosong" });
+        }
+
+        // Ambil data badge dari member
+        const [member] = await knex("members").select("badge").where("id", memberId);
+
+        if (!member) {
+            return res.status(404).json({ message: "Member tidak ditemukan" });
+        }
+
+        // Pastikan badge dalam format JSON yang benar
+        let badgeData;
+        try {
+            badgeData = typeof member.badge === "string" ? JSON.parse(member.badge) : member.badge;
+        } catch (error) {
+            return res.status(500).json({ message: "Gagal membaca data badge", error: error.message });
+        }
+
+        console.log("🔍 Badge sebelum update:", badgeData);
+
+        // Loop untuk mencari `pelatihan_id` dalam objek badge
+        let updated = false;
+        for (const tahunKey in badgeData) {
+            for (const index in badgeData[tahunKey]) {
+                if (badgeData[tahunKey][index].pelatihan_id === pelatihanId) {
+                    badgeData[tahunKey][index].status = "uncompleted"; // Update status
+                    updated = true;
+                    break;
+                }
+            }
+            if (updated) break;
+        }
+
+        if (!updated) {
+            return res.status(400).json({ message: "Pelatihan tidak ditemukan dalam badge" });
+        }
+
+        // Simpan kembali ke database
+        await knex("members")
+            .where("id", memberId)
+            .update({ badge: JSON.stringify(badgeData) });
+
+        console.log("✅ Badge berhasil diperbarui:", badgeData);
+        res.json({ message: "Status berhasil diperbarui", updatedBadge: badgeData });
+    } catch (error) {
+        console.error("❌ Error di backend:", error);
+        res.status(500).json({ message: "Terjadi kesalahan", error: error.message });
+    }
+});
+
 module.exports = router;
