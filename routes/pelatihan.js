@@ -372,6 +372,23 @@ router.get('/members/id/:member_id/training/:training_id', async (req, res) => {
     }
 });
 
+// endpoint hitung jumlah pendaftar
+router.get("/:pelatihanId/total-pendaftar", async (req, res) => {
+    try {
+        const { pelatihanId } = req.params;
+
+        // Hitung jumlah member_id berdasarkan pelatihan_id
+        const [countResult] = await knex("peserta_pelatihan")
+            .count("member_id as total")
+            .where("pelatihan_id", pelatihanId);
+
+        res.json({ total: countResult.total || 0 });
+    } catch (error) {
+        console.error("❌ Error fetching total pendaftar:", error);
+        res.status(500).json({ message: "Terjadi kesalahan", error: error.message });
+    }
+});
+
 // endpoint untuk mengambil data member di pelatihan dengan nilai kembali nama member, kode, actions
 router.get("/peserta-pelatihan/:pelatihanId/pendaftar", async (req, res) => {
     try {
@@ -379,11 +396,11 @@ router.get("/peserta-pelatihan/:pelatihanId/pendaftar", async (req, res) => {
 
         // Query untuk mendapatkan member_id dan kode dari peserta_pelatihan
         const peserta = await knex("peserta_pelatihan")
-            .select("member_id", "kode")
+            .select("member_id", "kode", "pelatihan_id", "kirim")
             .where("pelatihan_id", pelatihanId);
 
         if (!peserta.length) {
-            return res.status(404).json({ message: "Peserta tidak ditemukan" });
+            return res.json([]); // Kembalikan array kosong
         }
 
         // Ambil member_id yang unik untuk query efisien
@@ -407,6 +424,8 @@ router.get("/peserta-pelatihan/:pelatihanId/pendaftar", async (req, res) => {
             aksi: {
                 deleteId: p.member_id, // ID untuk tombol Hapus
                 kirimId: p.member_id,  // ID untuk tombol Kirim
+                pelatihanId: p.pelatihan_id, // Tambahkan pelatihan_id
+                isKirim: p.kirim === 1 // Tambahkan status kirim
             }
         }));
 
@@ -432,7 +451,13 @@ router.delete("/peserta/:id", async (req, res) => {
 router.put("/peserta/:id/kirim", async (req, res) => {
     try {
         const { id } = req.params;
-        await knex("peserta_pelatihan").where({ id }).update({ kirim: 1 });
+        const { pelatihan_id, member_id } = req.body;
+
+        // Update status kirim berdasarkan pelatihan_id dan member_id
+        await knex("peserta_pelatihan")
+            .where({ pelatihan_id, member_id })
+            .update({ kirim: 1 });
+
         res.json({ success: true, message: "Status berhasil diperbarui" });
     } catch (error) {
         res.status(500).json({ success: false, message: "Gagal memperbarui status" });
