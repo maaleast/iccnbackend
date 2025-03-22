@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const db2 = require('../dbPool');
+const knex = require("../dbKnex");
 
 // Fungsi transformasi dan pembuatan kode unik
 const transformIdentitas = (noIdentitas) => {
@@ -368,6 +369,73 @@ router.get('/members/id/:member_id/training/:training_id', async (req, res) => {
     } catch (error) {
         console.error("❌ Error mengambil data member:", error);
         res.status(500).json({ message: "Terjadi kesalahan pada server" });
+    }
+});
+
+// endpoint untuk mengambil data member di pelatihan dengan nilai kembali nama member, kode, actions
+router.get("/peserta-pelatihan/:pelatihanId/pendaftar", async (req, res) => {
+    try {
+        const { pelatihanId } = req.params;
+
+        // Query untuk mendapatkan member_id dan kode dari peserta_pelatihan
+        const peserta = await knex("peserta_pelatihan")
+            .select("member_id", "kode")
+            .where("pelatihan_id", pelatihanId);
+
+        if (!peserta.length) {
+            return res.status(404).json({ message: "Peserta tidak ditemukan" });
+        }
+
+        // Ambil member_id yang unik untuk query efisien
+        const memberIds = peserta.map(p => p.member_id);
+
+        // Query untuk mendapatkan nama berdasarkan member_id
+        const members = await knex("members")
+            .select("id", "nama")
+            .whereIn("id", memberIds);
+
+        // Buat mapping id -> nama untuk akses cepat
+        const memberMap = {};
+        members.forEach(member => {
+            memberMap[member.id] = member.nama;
+        });
+
+        // Gabungkan data peserta dengan nama
+        const result = peserta.map(p => ({
+            nama: memberMap[p.member_id] || "Nama tidak ditemukan",
+            kode: p.kode,
+            aksi: {
+                deleteId: p.member_id, // ID untuk tombol Hapus
+                kirimId: p.member_id,  // ID untuk tombol Kirim
+            }
+        }));
+
+        res.json(result);
+    } catch (error) {
+        console.error("Error fetching data:", error);
+        res.status(500).json({ message: "Internal Server Error" });
+    }
+});
+
+// DELETE peserta
+router.delete("/peserta/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+        await knex("peserta_pelatihan").where({ id }).del();
+        res.json({ success: true, message: "Peserta berhasil dihapus" });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Gagal menghapus peserta" });
+    }
+});
+
+// UPDATE status kirim
+router.put("/peserta/:id/kirim", async (req, res) => {
+    try {
+        const { id } = req.params;
+        await knex("peserta_pelatihan").where({ id }).update({ kirim: 1 });
+        res.json({ success: true, message: "Status berhasil diperbarui" });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Gagal memperbarui status" });
     }
 });
 
