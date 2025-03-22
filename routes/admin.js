@@ -578,13 +578,15 @@ router.post('/gallery/upload', upload.array('images', 5), (req, res) => {
         return res.status(400).json({ message: 'Tidak ada file yang diunggah' });
     }
 
+    const { keterangan } = req.body; // Ambil keterangan dari body request
+
     const imageUrls = req.files.map(file => {
         return `${req.protocol}://${req.get('host')}/uploads/gallery/${file.filename}`;
     });
 
-    // Simpan URL gambar ke databaseS
-    const sql = 'INSERT INTO gallery (image_url) VALUES ?';
-    const values = imageUrls.map(url => [url]);
+    // Simpan URL gambar dan keterangan ke database
+    const sql = 'INSERT INTO gallery (image_url, keterangan_foto) VALUES ?';
+    const values = imageUrls.map(url => [url, keterangan]);
 
     db.query(sql, [values], (err, result) => {
         if (err) {
@@ -596,6 +598,7 @@ router.post('/gallery/upload', upload.array('images', 5), (req, res) => {
             data: imageUrls.map((url, index) => ({
                 id: result.insertId + index, // ID unik untuk setiap foto
                 image_url: url,
+                keterangan_foto: keterangan,
             })),
         });
     });
