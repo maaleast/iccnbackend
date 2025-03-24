@@ -4,6 +4,7 @@ const db = require('../db');
 const db2 = require('../dbPool');
 const knex = require("../dbKnex");
 const moment = require('moment');
+const excel = require('exceljs');
 
 // Fungsi transformasi dan pembuatan kode unik
 const transformIdentitas = (noIdentitas) => {
@@ -619,6 +620,149 @@ router.get('/peserta-pelatihan/kode/:idMember/:idTraining', async (req, res) => 
     } catch (error) {
         console.error('❌ Error:', error);
         res.status(500).json({ message: 'Terjadi kesalahan pada server', error: error.message });
+    }
+});
+
+// Endpoint untuk export data peserta pelatihan ke Excel
+router.get('/export-peserta/:pelatihanId', async (req, res) => {
+    const { pelatihanId } = req.params;
+    const connection = await db2.getConnection();
+
+    try {
+        await connection.beginTransaction();
+
+        // 1. Ambil data pelatihan dari pelatihan_member
+        const [pelatihanResults] = await connection.query(
+            'SELECT judul_pelatihan, tanggal_pelatihan, deskripsi_pelatihan, link, tanggal_berakhir, narasumber, badge FROM pelatihan_member WHERE id = ?',
+            [pelatihanId]
+        );
+
+        if (pelatihanResults.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({ message: 'Pelatihan tidak ditemukan' });
+        }
+
+        const pelatihan = pelatihanResults[0];
+
+        // 2. Ambil data peserta dari peserta_pelatihan
+        const [pesertaResults] = await connection.query(
+            'SELECT member_id, waktu_daftar, waktu_selesai FROM peserta_pelatihan WHERE pelatihan_id = ?',
+            [pelatihanId]
+        );
+
+        if (pesertaResults.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({ message: 'Tidak ada peserta untuk pelatihan ini' });
+        }
+
+        // 3. Ambil semua member_id untuk query berikutnya
+        const memberIds = pesertaResults.map(p => p.member_id);
+
+        // 4. Ambil data member dari tabel members
+        const [memberResults] = await connection.query(
+            `SELECT 
+                id, no_identitas, tipe_keanggotaan, institusi, website, email, 
+                alamat, wilayah, nama, nomor_wa, additional_members_info, badge 
+             FROM members 
+             WHERE id IN (?)`,
+            [memberIds]
+        );
+
+        await connection.commit();
+
+        // 5. Gabungkan data peserta dengan data member
+        const combinedData = pesertaResults.map(peserta => {
+            const member = memberResults.find(m => m.id === peserta.member_id);
+            return {
+                ...peserta,
+                ...member,
+                pelatihan: pelatihan
+            };
+        });
+
+        // 6. Buat workbook Excel
+        const workbook = new excel.Workbook();
+        const worksheet = workbook.addWorksheet(`Pendaftar_${pelatihan.judul_pelatihan}`);
+
+        // 7. Definisikan kolom
+        worksheet.columns = [
+            { header: 'No Identitas', key: 'no_identitas', width: 20 },
+            { header: 'Nama', key: 'nama', width: 25 },
+            { header: 'Tipe Keanggotaan', key: 'tipe_keanggotaan', width: 20 },
+            { header: 'Institusi', key: 'institusi', width: 30 },
+            { header: 'Website', key: 'website', width: 25 },
+            { header: 'Email', key: 'email', width: 30 },
+            { header: 'Alamat', key: 'alamat', width: 40 },
+            { header: 'Wilayah', key: 'wilayah', width: 20 },
+            { header: 'Nomor WA', key: 'nomor_wa', width: 20 },
+            { header: 'Member Tambahan', key: 'additional_members_info', width: 30 },
+            { header: 'Waktu Daftar', key: 'waktu_daftar', width: 25 },
+            { header: 'Waktu Selesai', key: 'waktu_selesai', width: 25 },
+            { header: 'Judul Pelatihan', key: 'judul_pelatihan', width: 30 },
+            { header: 'Tanggal Pelatihan', key: 'tanggal_pelatihan', width: 20 },
+            { header: 'Narasumber', key: 'narasumber', width: 25 }
+        ];
+
+        // 8. Tambahkan data ke worksheet
+        combinedData.forEach(data => {
+            worksheet.addRow({
+                no_identitas: data.no_identitas,
+                nama: data.nama,
+                tipe_keanggotaan: data.tipe_keanggotaan,
+                institusi: data.institusi,
+                website: data.website || '-',
+                email: data.email,
+                alamat: data.alamat,
+                wilayah: data.wilayah,
+                nomor_wa: data.nomor_wa,
+                additional_members_info: data.additional_members_info || 'Tidak ada member tambahan',
+                waktu_daftar: data.waktu_daftar ? moment(data.waktu_daftar).format('YYYY-MM-DD HH:mm:ss') : '-',
+                waktu_selesai: data.waktu_selesai ? moment(data.waktu_selesai).format('YYYY-MM-DD HH:mm:ss') : '-',
+                judul_pelatihan: data.pelatihan.judul_pelatihan,
+                tanggal_pelatihan: data.pelatihan.tanggal_pelatihan ? moment(data.pelatihan.tanggal_pelatihan).format('YYYY-MM-DD') : '-',
+                narasumber: data.pelatihan.narasumber
+            });
+        });
+
+        // 9. Format header
+        worksheet.getRow(1).eachCell((cell) => {
+            cell.font = { bold: true };
+            cell.fill = {
+                type: 'pattern',
+                pattern: 'solid',
+                fgColor: { argb: 'FFD3D3D3' }
+            };
+            cell.border = {
+                top: { style: 'thin' },
+                left: { style: 'thin' },
+                bottom: { style: 'thin' },
+                right: { style: 'thin' }
+            };
+        });
+
+        // 10. Set response headers untuk download Excel
+        const timestamp = moment().format('YYYYMMDD_HHmmss');
+        const filename = `Dataset_Pendaftaran_${pelatihan.judul_pelatihan}_${timestamp}.xlsx`;
+
+        res.setHeader(
+            'Content-Type',
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        );
+        res.setHeader(
+            'Content-Disposition',
+            `attachment; filename=${encodeURIComponent(filename)}`
+        );
+
+        // 11. Kirim workbook sebagai response
+        await workbook.xlsx.write(res);
+        res.end();
+
+    } catch (error) {
+        await connection.rollback();
+        console.error('❌ Error:', error);
+        res.status(500).json({ message: 'Terjadi kesalahan pada server', error: error.message });
+    } finally {
+        connection.release();
     }
 });
 
