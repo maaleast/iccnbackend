@@ -565,29 +565,34 @@ router.get('/checkVerificationStatus/:user_id', (req, res) => {
 
 //Mengambil beberapa info member untuk setting member dashboard
 router.get('/member-info', (req, res) => {
-    const userId = req.query.user_id; // Ambil user_id dari query parameter
+    const userId = req.query.user_id;
+    
+    console.log("📥 Request received for user_id:", userId); // Debugging log
 
     if (!userId) {
+        console.error("❌ User ID tidak ditemukan dalam request");
         return res.status(400).json({ message: 'User ID tidak ditemukan' });
     }
 
     const query = `
-        SELECT tipe_keanggotaan, institusi, name, nomor_wa 
+        SELECT no_identitas, tipe_keanggotaan, institusi, nama, nomor_wa 
         FROM members 
         WHERE user_id = ?
     `;
 
     db.query(query, [userId], (err, results) => {
         if (err) {
-            console.error('❌ Error mengambil data member:', err);
+            console.error("❌ Error SQL:", err);
             return res.status(500).json({ message: 'Gagal mengambil data member' });
         }
+
+        console.log("📡 Query results:", results);
 
         if (results.length === 0) {
             return res.status(404).json({ message: 'Data member tidak ditemukan' });
         }
 
-        res.json(results[0]); // Mengembalikan data member
+        res.json(results[0]);
     });
 });
 
