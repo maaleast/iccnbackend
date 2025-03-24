@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const db2 = require('../dbPool');
+const knex = require("../dbKnex");
+const moment = require('moment');
 
 // Fungsi transformasi dan pembuatan kode unik
 const transformIdentitas = (noIdentitas) => {
@@ -42,6 +44,26 @@ const transformToRandomChars = (str) => {
 const isKodeUnique = async (kode) => {
     const [results] = await db2.query('SELECT * FROM peserta_pelatihan WHERE kode = ?', [kode]);
     return results.length === 0; // True jika kode unik
+};
+
+// Fungsi untuk menghitung lama pelatihan
+const calculateDuration = (startDate, endDate) => {
+    const duration = endDate - startDate;
+    const seconds = Math.floor(duration / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+    const months = Math.floor(days / 30);
+    const years = Math.floor(months / 12);
+
+    return {
+        years,
+        months: months % 12,
+        days: days % 30,
+        hours: hours % 24,
+        minutes: minutes % 60,
+        seconds: seconds % 60
+    };
 };
 
 // enspoint untuk mendaftar pelatihan
@@ -160,75 +182,117 @@ router.post('/mendaftar-pelatihan', async (req, res) => {
 });
 
 // Endpoint untuk menyelesaikan pelatihan
-router.post('/selesai-pelatihan', (req, res) => {
-    const { pelatihan_id, kode, user_id } = req.body;
+router.post('/selesai-pelatihan', async (req, res) => {
+    const { pelatihan_id, kode, idMember } = req.body;
 
-    // 1. Cek apakah kode pelatihan valid
-    db.query(
-        'SELECT * FROM pelatihan_member WHERE id = ? AND kode = ?',
-        [pelatihan_id, kode],
-        (err, pelatihan) => {
-            if (err) {
-                console.error('❌ Error query pelatihan:', err);
-                return res.status(500).json({ message: 'Gagal menyelesaikan pelatihan' });
-            }
+    // Mulai transaksi
+    const connection = await db2.getConnection();
+    try {
+        await connection.beginTransaction();
 
-            if (pelatihan.length === 0) {
-                return res.status(400).json({ message: 'Kode pelatihan tidak valid' });
-            }
+        // 1. Cari data di tabel peserta_pelatihan
+        const [pesertaResults] = await connection.query(
+            'SELECT * FROM peserta_pelatihan WHERE pelatihan_id = ? AND member_id = ?',
+            [pelatihan_id, idMember]
+        );
 
-            // 2. Ambil badge dari pelatihan
-            const badgePelatihan = pelatihan[0].badge;
-            if (!badgePelatihan) {
-                return res.status(400).json({ message: 'Badge tidak ditemukan untuk pelatihan ini' });
-            }
-
-            // 3. Update badge di table members berdasarkan user_id
-            db.query(
-                'SELECT badge FROM members WHERE user_id = ?', // Ubah id menjadi user_id
-                [user_id],
-                (err, member) => {
-                    if (err) {
-                        console.error('❌ Error query members:', err);
-                        return res.status(500).json({ message: 'Gagal menyelesaikan pelatihan' });
-                    }
-
-                    // Pastikan badges selalu berupa array
-                    let badges = member[0].badge || []; // Jika badge null/undefined, gunakan array kosong
-                    if (typeof badges === 'string') {
-                        try {
-                            badges = JSON.parse(badges); // Konversi string JSON ke array
-                        } catch (error) {
-                            console.error('❌ Error parsing badges:', error);
-                            badges = []; // Jika parsing gagal, gunakan array kosong
-                        }
-                    }
-
-                    // Tambahkan badge baru ke array
-                    badges.push({
-                        badge: badgePelatihan,
-                        pelatihan_id: pelatihan_id,
-                        tanggal_selesai: new Date().toISOString(),
-                    });
-
-                    // Update badge di database
-                    db.query(
-                        'UPDATE members SET badge = ? WHERE user_id = ?', // Ubah id menjadi user_id
-                        [JSON.stringify(badges), user_id], // Simpan sebagai JSON string
-                        (err, result) => {
-                            if (err) {
-                                console.error('❌ Error update members:', err);
-                                return res.status(500).json({ message: 'Gagal menyelesaikan pelatihan' });
-                            }
-
-                            // 4. Beri respons sukses
-                            res.json({ message: 'Pelatihan selesai! Badge telah ditambahkan.', badge: badgePelatihan });
-                        }
-                    );
-                }
-            );
+        if (pesertaResults.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({ message: 'Data peserta pelatihan tidak ditemukan' });
         }
-    );
+
+        const peserta = pesertaResults[0];
+
+        // 2. Validasi kode
+        if (peserta.kode !== kode) {
+            await connection.rollback();
+            return res.status(400).json({ message: 'Kode pelatihan tidak valid' });
+        }
+
+        // 3. Update waktu_selesai di tabel peserta_pelatihan
+        const waktuSelesai = moment().format('YYYY-MM-DD HH:mm:ss');
+        await connection.query(
+            'UPDATE peserta_pelatihan SET waktu_selesai = ? WHERE pelatihan_id = ? AND member_id = ?',
+            [waktuSelesai, pelatihan_id, idMember]
+        );
+
+        // 4. Cari data di tabel members
+        const [memberResults] = await connection.query(
+            'SELECT no_identitas, badge FROM members WHERE id = ?',
+            [idMember]
+        );
+
+        if (memberResults.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({ message: 'Member tidak ditemukan' });
+        }
+
+        const member = memberResults[0];
+
+        // 5. Ambil 2 digit terakhir dari no_identitas
+        const tahunKey = member.no_identitas.slice(-2);
+
+        // 6. Parse data badge
+        let badgeData = {};
+        try {
+            badgeData = typeof member.badge === 'string' ? JSON.parse(member.badge) : member.badge;
+        } catch (error) {
+            await connection.rollback();
+            return res.status(500).json({ message: 'Gagal memproses data badge', error: error.message });
+        }
+
+        // 7. Cari pelatihan_id di dalam badgeData
+        if (!badgeData[tahunKey]) {
+            await connection.rollback();
+            return res.status(400).json({ message: 'Tidak ada badge untuk tahun ini' });
+        }
+
+        let pelatihanIndex = null;
+        for (const index in badgeData[tahunKey]) {
+            if (badgeData[tahunKey][index].pelatihan_id === pelatihan_id) {
+                pelatihanIndex = index;
+                break;
+            }
+        }
+
+        if (pelatihanIndex === null) {
+            await connection.rollback();
+            return res.status(400).json({ message: 'Pelatihan tidak ditemukan dalam badge' });
+        }
+
+        // 8. Hitung lama_pelatihan
+        const waktuDaftar = new Date(peserta.waktu_daftar);
+        const waktuSelesaiDate = new Date(waktuSelesai);
+        const lamaPelatihan = calculateDuration(waktuDaftar, waktuSelesaiDate);
+
+        // 9. Update status dan tambahkan waktu_daftar, waktu_selesai, lama_pelatihan
+        badgeData[tahunKey][pelatihanIndex].status = 'completed';
+        badgeData[tahunKey][pelatihanIndex].waktu_daftar = peserta.waktu_daftar;
+        badgeData[tahunKey][pelatihanIndex].waktu_selesai = waktuSelesai;
+        badgeData[tahunKey][pelatihanIndex].lama_pelatihan = lamaPelatihan;
+
+        // 10. Update badge di tabel members
+        await connection.query(
+            'UPDATE members SET badge = ? WHERE id = ?',
+            [JSON.stringify(badgeData), idMember]
+        );
+
+        // Commit transaksi
+        await connection.commit();
+
+        // Beri respons sukses
+        res.json({ 
+            message: 'Pelatihan selesai! Badge telah diperbarui.', 
+            badge: badgeData[tahunKey][pelatihanIndex] 
+        });
+
+    } catch (error) {
+        await connection.rollback();
+        console.error('❌ Error:', error);
+        res.status(500).json({ message: 'Terjadi kesalahan pada server', error: error.message });
+    } finally {
+        connection.release();
+    }
 });
 
 // Endpoint untuk mendapatkan ID member berdasarkan user_id (Tanpa Authentication) untuk mendaftar pelatihan
@@ -368,6 +432,193 @@ router.get('/members/id/:member_id/training/:training_id', async (req, res) => {
     } catch (error) {
         console.error("❌ Error mengambil data member:", error);
         res.status(500).json({ message: "Terjadi kesalahan pada server" });
+    }
+});
+
+// endpoint hitung jumlah pendaftar
+router.get("/:pelatihanId/total-pendaftar", async (req, res) => {
+    try {
+        const { pelatihanId } = req.params;
+
+        // Hitung jumlah member_id berdasarkan pelatihan_id
+        const [countResult] = await knex("peserta_pelatihan")
+            .count("member_id as total")
+            .where("pelatihan_id", pelatihanId);
+
+        res.json({ total: countResult.total || 0 });
+    } catch (error) {
+        console.error("❌ Error fetching total pendaftar:", error);
+        res.status(500).json({ message: "Terjadi kesalahan", error: error.message });
+    }
+});
+
+// endpoint untuk mengambil data member di pelatihan dengan nilai kembali nama member, kode, actions
+router.get("/peserta-pelatihan/:pelatihanId/pendaftar", async (req, res) => {
+    try {
+        const { pelatihanId } = req.params;
+
+        // Query untuk mendapatkan member_id dan kode dari peserta_pelatihan
+        const peserta = await knex("peserta_pelatihan")
+            .select("member_id", "kode", "pelatihan_id", "kirim")
+            .where("pelatihan_id", pelatihanId);
+
+        if (!peserta.length) {
+            return res.json([]); // Kembalikan array kosong
+        }
+
+        // Ambil member_id yang unik untuk query efisien
+        const memberIds = peserta.map(p => p.member_id);
+
+        // Query untuk mendapatkan nama berdasarkan member_id
+        const members = await knex("members")
+            .select("id", "nama")
+            .whereIn("id", memberIds);
+
+        // Buat mapping id -> nama untuk akses cepat
+        const memberMap = {};
+        members.forEach(member => {
+            memberMap[member.id] = member.nama;
+        });
+
+        // Gabungkan data peserta dengan nama
+        const result = peserta.map(p => ({
+            nama: memberMap[p.member_id] || "Nama tidak ditemukan",
+            kode: p.kode,
+            aksi: {
+                deleteId: p.member_id, // ID untuk tombol Hapus
+                kirimId: p.member_id,  // ID untuk tombol Kirim
+                pelatihanId: p.pelatihan_id, // Tambahkan pelatihan_id
+                isKirim: p.kirim === 1 // Tambahkan status kirim
+            }
+        }));
+
+        res.json(result);
+    } catch (error) {
+        console.error("Error fetching data:", error);
+        res.status(500).json({ message: "Internal Server Error" });
+    }
+});
+
+// DELETE peserta
+router.delete("/peserta/:id", async (req, res) => {
+    try {
+        const { id } = req.params;
+        await knex("peserta_pelatihan").where({ id }).del();
+        res.json({ success: true, message: "Peserta berhasil dihapus" });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Gagal menghapus peserta" });
+    }
+});
+
+// UPDATE status kirim
+router.put("/peserta/:id/kirim", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { pelatihan_id, member_id } = req.body;
+
+        // Update status kirim berdasarkan pelatihan_id dan member_id
+        await knex("peserta_pelatihan")
+            .where({ pelatihan_id, member_id })
+            .update({ kirim: 1 });
+
+        res.json({ success: true, message: "Status berhasil diperbarui" });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Gagal memperbarui status" });
+    }
+});
+
+// update status di badge jika pelatihan tidak selesai
+router.put("/update-status/uncompleted", async (req, res) => {
+    try {
+        console.log("📥 Data diterima di backend:", req.body);
+
+        const { idMember, pelatihanId } = req.body;
+        const memberId = idMember;
+
+        if (!memberId || !pelatihanId) {
+            return res.status(400).json({ message: "memberId atau pelatihanId tidak boleh kosong" });
+        }
+
+        // Ambil data badge dari member
+        const [member] = await knex("members").select("badge").where("id", memberId);
+
+        if (!member) {
+            return res.status(404).json({ message: "Member tidak ditemukan" });
+        }
+
+        // Pastikan badge dalam format JSON yang benar
+        let badgeData;
+        try {
+            badgeData = typeof member.badge === "string" ? JSON.parse(member.badge) : member.badge;
+        } catch (error) {
+            return res.status(500).json({ message: "Gagal membaca data badge", error: error.message });
+        }
+
+        console.log("🔍 Badge sebelum update:", badgeData);
+
+        // Loop untuk mencari `pelatihan_id` dalam objek badge
+        let updated = false;
+        for (const tahunKey in badgeData) {
+            for (const index in badgeData[tahunKey]) {
+                if (badgeData[tahunKey][index].pelatihan_id === pelatihanId) {
+                    badgeData[tahunKey][index].status = "uncompleted"; // Update status
+                    updated = true;
+                    break;
+                }
+            }
+            if (updated) break;
+        }
+
+        if (!updated) {
+            return res.status(400).json({ message: "Pelatihan tidak ditemukan dalam badge" });
+        }
+
+        // Simpan kembali ke database
+        await knex("members")
+            .where("id", memberId)
+            .update({ badge: JSON.stringify(badgeData) });
+
+        console.log("✅ Badge berhasil diperbarui:", badgeData);
+        res.json({ message: "Status berhasil diperbarui", updatedBadge: badgeData });
+    } catch (error) {
+        console.error("❌ Error di backend:", error);
+        res.status(500).json({ message: "Terjadi kesalahan", error: error.message });
+    }
+});
+
+// Endpoint untuk mendapatkan kode pelatihan berdasarkan idMember dan idTraining
+router.get('/peserta-pelatihan/kode/:idMember/:idTraining', async (req, res) => {
+    const { idMember, idTraining } = req.params;
+
+    try {
+        // Cari data di tabel peserta_pelatihan berdasarkan pelatihan_id dan member_id
+        const [results] = await db2.query(
+            'SELECT kode, kirim FROM peserta_pelatihan WHERE pelatihan_id = ? AND member_id = ?',
+            [idTraining, idMember]
+        );
+
+        // Jika data tidak ditemukan
+        if (results.length === 0) {
+            return res.status(404).json({ 
+                message: 'Anda tidak terdaftar sebagai peserta atau data Anda dihapus admin. Silahkan konfirmasi ke Admin.' 
+            });
+        }
+
+        const peserta = results[0];
+
+        // Cek status kirim
+        if (peserta.kirim === 1) {
+            // Jika kirim bernilai 1, kembalikan kode
+            return res.json({ kode: peserta.kode });
+        } else {
+            // Jika kirim bernilai 0, kembalikan pesan bahwa kode belum dikirim
+            return res.status(400).json({ 
+                message: 'Kode belum dikirim admin atau Anda belum menyelesaikan pelatihan.' 
+            });
+        }
+    } catch (error) {
+        console.error('❌ Error:', error);
+        res.status(500).json({ message: 'Terjadi kesalahan pada server', error: error.message });
     }
 });
 
