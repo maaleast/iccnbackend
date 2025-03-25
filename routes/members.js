@@ -107,7 +107,51 @@ router.get('/checkUserRole', (req, res) => {
     });
 });
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// UNTUK REGISTER MEMBERRRRRRRRR
 // **REGISTER MEMBER**
+// Endpoint untuk menambahkan saldo dari daftar member
+router.post('/addsaldomember', async (req, res) => {
+    try {
+        console.log("Data yang diterima di /addsaldomember:", req.body);
+
+        const { nominal_transfer, no_identitas, nama_kuitansi, nama } = req.body;
+
+        // Validasi input
+        if (!nominal_transfer || !no_identitas || !nama_kuitansi || !nama) {
+            return res.status(400).json({ message: 'Semua field wajib diisi!' });
+        }
+
+        // Catat pendapatan ke tabel admin_laporan_keuangan
+        await db.promise().query(
+            'INSERT INTO admin_laporan_keuangan (status, jumlah, deskripsi, tanggal_waktu) VALUES (?, ?, ?, ?)',
+            ['MASUK', nominal_transfer, `Saldo bertambah dari pendaftaran member ${no_identitas} (${nama_kuitansi}) dari member bernama ${nama}`, new Date().toISOString()]
+        );
+
+        console.log("Saldo berhasil ditambahkan ke database.");
+        res.status(201).json({ message: 'Saldo berhasil ditambahkan' });
+    } catch (err) {
+        console.error('Error saat menambahkan saldo:', err);
+        res.status(500).json({ message: 'Gagal menambahkan saldo', error: err });
+    }
+});
+
+// ===================================
+// endpoint daftar form member
+
 router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'bukti_pembayaran' }, { name: 'logo' }]), async (req, res) => {
     try {
         const { tipe_keanggotaan, institusi, website, email, alamat, wilayah, name, nominal_transfer, nomor_wa, nama_kuitansi } = req.body;
@@ -166,20 +210,6 @@ router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'buk
                             return res.status(500).json({ message: 'Gagal memperbarui role pengguna', error: err });
                         }
 
-                        // Catat pendapatan dari registrasi ke tabel admin_laporan_keuangan
-                        try {
-                            // Ambil saldo terakhir
-                            const saldoTerakhir = await getLastBalance();
-
-                            // Hitung saldo baru
-                            const saldoBaru = saldoTerakhir + parseFloat(nominal_transfer);
-
-                            // Simpan data ke tabel admin_laporan_keuangan
-                            await db.promise().query(
-                                'INSERT INTO admin_laporan_keuangan (status, jumlah, deskripsi, tanggal_waktu, saldo_akhir) VALUES (?, ?, ?, ?, ?)',
-                                ['MASUK', nominal_transfer, `Pendaftaran Member - ${institusi}`, new Date().toISOString(), saldoBaru]
-                            );
-
                             res.status(201).json({ 
                                 message: 'Pendaftaran member berhasil, menunggu verifikasi', 
                                 file_sk: fileSkPath, 
@@ -201,6 +231,12 @@ router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'buk
         res.status(500).json({ message: 'Gagal mendaftar sebagai member', error: err });
     }
 });
+
+
+
+
+
+
 
 // **REQUEST PERPANJANG MEMBER**
 router.post('/request-perpanjang', upload.single('bukti_pembayaran_perpanjang'), (req, res) => {
