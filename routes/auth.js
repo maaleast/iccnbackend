@@ -68,18 +68,24 @@ const upload = multer({
 // Generate Unique ID
 async function generateUniqueIdentitas(userType) {
     const tahun = new Date().getFullYear() % 100;
-    const prefixMap = { Universitas: "UN", Perusahaan: "PR", Individu: "IN", Mahasiswa: "MA" };
+    const prefixMap = { Universitas: "UI", Perusahaan: "PR", Individu: "IN", Mahasiswa: "MA" };
     const prefix = prefixMap[userType];
+
     if (!prefix) throw new Error("Tipe keanggotaan tidak valid!");
 
     try {
         const [rows] = await db.promise().query(
-            'SELECT MAX(CAST(SUBSTRING(no_identitas, 6, 3) AS UNSIGNED)) AS maxCounter FROM members WHERE no_identitas LIKE ?',
-            [`${tahun}.${prefix}.%`]
+            `SELECT MAX(CAST(SUBSTRING(no_identitas, 6, 3) AS UNSIGNED)) AS maxCounter 
+             FROM members 
+             WHERE no_identitas LIKE ?`,
+            [`${tahun}.${prefix}%`]
         );
 
-        const counter = (rows[0].maxCounter || 0) + 1;
-        return `${tahun}.${prefix}.${String(counter).padStart(3, '0')}`;
+        // Ambil nilai maxCounter dan tambahkan 1 jika ada, atau mulai dari 1
+        const counter = (rows[0]?.maxCounter || 0) + 1;
+
+        // Format identitas baru
+        return `${tahun}.${prefix}${String(counter).padStart(3, '0')}.01`;
     } catch (error) {
         console.error("Error generating unique identitas:", error);
         throw new Error("Gagal menghasilkan no_identitas");
@@ -127,35 +133,34 @@ router.post('/register', async (req, res) => {
 });
 
 // 📌 REGISTER MEMBER
-router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'bukti_pembayaran' }, { name: 'logo' }]), async (req, res) => {
+router.post("/register-member", upload.fields([{ name: "file_sk" }, { name: "bukti_pembayaran" }, { name: "logo" }]), async (req, res) => {
     try {
         console.log("🔹 Register-Member route hit");
         console.log("🛠 Body:", req.body);
         console.log("🛠 Files:", req.files);
-
 
         const { username, email, password, userType, institutionName, websiteLink, address, region, personalName, transferAmount, whatsappGroupNumber, receiptName } = req.body;
         let { additional_members_info } = req.body;
 
         // 🔍 Validasi Input
         if (!username || !email || !password || !userType || !transferAmount) {
-            return res.status(400).json({ message: 'Semua field wajib diisi!' });
+            return res.status(400).json({ message: "Semua field wajib diisi!" });
         }
 
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(email)) {
-            return res.status(400).json({ message: 'Format email tidak valid!' });
+            return res.status(400).json({ message: "Format email tidak valid!" });
         }
 
         const waRegex = /^[0-9]+$/;
         if (whatsappGroupNumber && !waRegex.test(whatsappGroupNumber)) {
-            return res.status(400).json({ message: 'Nomor WA hanya boleh berisi angka!' });
+            return res.status(400).json({ message: "Nomor WA hanya boleh berisi angka!" });
         }
 
         // 🔍 Cek apakah email sudah terdaftar
-        const [existingUsers] = await db.promise().query('SELECT id FROM users WHERE email = ?', [email]);
+        const [existingUsers] = await db.promise().query("SELECT id FROM users WHERE email = ?", [email]);
         if (existingUsers.length > 0) {
-            return res.status(400).json({ message: 'Email sudah terdaftar!' });
+            return res.status(400).json({ message: "Email sudah terdaftar!" });
         }
 
         // 🔑 Hash Password
@@ -163,17 +168,17 @@ router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'buk
         const verificationToken = uuidv4();
 
         // 🔍 Cek apakah file wajib diunggah
-        if (!req.files || !req.files['file_sk'] || !req.files['bukti_pembayaran']) {
-            return res.status(400).json({ message: 'File SK dan Bukti Pembayaran harus diunggah!' });
+        if (!req.files || !req.files["file_sk"] || !req.files["bukti_pembayaran"]) {
+            return res.status(400).json({ message: "File SK dan Bukti Pembayaran harus diunggah!" });
         }
 
-        const fileSkPath = `/uploads/file_sk/${req.files['file_sk'][0].filename}`;
-        const buktiPembayaranPath = `/uploads/bukti_pembayaran/${req.files['bukti_pembayaran'][0].filename}`;
+        const fileSkPath = `/uploads/file_sk/${req.files["file_sk"][0].filename}`;
+        const buktiPembayaranPath = `/uploads/bukti_pembayaran/${req.files["bukti_pembayaran"][0].filename}`;
 
         let logoPath = null;
-        if (req.files['logo']) {
-            const userTypeDir = userType.toLowerCase().replace(/\s+/g, '_');
-            logoPath = `/uploads/${userTypeDir}/logo/${req.files['logo'][0].filename}`;
+        if (req.files["logo"]) {
+            const userTypeDir = userType.toLowerCase().replace(/\s+/g, "_");
+            logoPath = `/uploads/${userTypeDir}/logo/${req.files["logo"][0].filename}`;
         }
 
         additional_members_info = additional_members_info || null;
@@ -182,23 +187,30 @@ router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'buk
         const tanggalSubmit = new Date();
         const masaAktif = new Date(tanggalSubmit);
         masaAktif.setFullYear(masaAktif.getFullYear() + 1);
-        const masaAktifFormatted = masaAktif.toISOString().split('T')[0];
+        const masaAktifFormatted = masaAktif.toISOString().split("T")[0];
 
         // 🔥 Transaksi Database untuk menghindari corrupt data
         await db.promise().beginTransaction();
 
         // Insert ke table users
         const [userResult] = await db.promise().query(
-            'INSERT INTO users (username, email, password, verification_token, is_verified, role) VALUES (?, ?, ?, ?, ?, ?)',
-            [username, email, hashedPassword, verificationToken, false, 'member']
+            "INSERT INTO users (username, email, password, verification_token, is_verified, role) VALUES (?, ?, ?, ?, ?, ?)",
+            [username, email, hashedPassword, verificationToken, false, "member"]
         );
 
         const user_id = userResult.insertId;
 
         // Insert ke table members
         await db.promise().query(
-            'INSERT INTO members (user_id, no_identitas, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, file_sk, bukti_pembayaran, logo, status_verifikasi, tanggal_submit, masa_aktif) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "PENDING", NOW(), ?)',
-            [user_id, no_identitas, userType, institutionName, websiteLink, email, address, region, personalName, transferAmount, whatsappGroupNumber, receiptName, additional_members_info, fileSkPath, buktiPembayaranPath, logoPath, masaAktifFormatted]
+            "INSERT INTO members (user_id, no_identitas, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, file_sk, bukti_pembayaran, logo, status_verifikasi, tanggal_submit, masa_aktif, badge) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NOW(), ?, ?)",
+            [user_id, no_identitas, userType, institutionName, websiteLink, email, address, region, personalName, transferAmount, whatsappGroupNumber, receiptName, additional_members_info, fileSkPath, buktiPembayaranPath, logoPath, masaAktifFormatted, "{}"]
+        );
+
+        // Catat pendapatan dari registrasi ke tabel admin_laporan_keuangan
+        const deskripsi = `Pendaftaran Member dari ${no_identitas}, dengan nama ${personalName}, Nama kuitansinya ${receiptName}`;
+        await db.promise().query(
+            "INSERT INTO admin_laporan_keuangan (status, jumlah, deskripsi, tanggal_waktu) VALUES (?, ?, ?, NOW())",
+            ["MASUK", transferAmount, deskripsi]
         );
 
         // 🔹 Kirim Email Verifikasi
@@ -206,31 +218,29 @@ router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'buk
             await transporter.sendMail({
                 from: process.env.SMTP_EMAIL,
                 to: email,
-                subject: 'Verifikasi Akun ICCN',
-                html: `<p>Terima kasih telah mendaftar sebagai member ICCN. Klik <a href="${process.env.BASE_URL}/auth/verify?token=${verificationToken}">di sini</a> untuk verifikasi akun Anda.</p>`
+                subject: "Verifikasi Akun ICCN",
+                html: `<p>Terima kasih telah mendaftar sebagai member ICCN. Klik <a href="${process.env.BASE_URL}/auth/verify?token=${verificationToken}">di sini</a> untuk verifikasi akun Anda.</p>`,
             });
 
             await db.promise().commit();
 
             res.status(201).json({
-                message: 'Pendaftaran member berhasil! Silakan cek email untuk verifikasi.',
+                message: "Pendaftaran member berhasil! Silakan cek email untuk verifikasi.",
                 file_sk: fileSkPath,
                 bukti_pembayaran: buktiPembayaranPath,
                 logo: logoPath,
-                masa_aktif: masaAktifFormatted
+                masa_aktif: masaAktifFormatted,
+                no_identitas: no_identitas,
             });
-
         } catch (emailError) {
             await db.promise().rollback(); // Rollback jika gagal kirim email
-            console.error('❌ Gagal mengirim email:', emailError);
-            res.status(500).json({ message: 'Gagal mengirim email verifikasi, coba lagi nanti.' });
+            console.error("❌ Gagal mengirim email:", emailError);
+            res.status(500).json({ message: "Gagal mengirim email verifikasi, coba lagi nanti." });
         }
-
-
     } catch (error) {
         await db.promise().rollback();
-        console.error('❌ Error saat registrasi:', error);
-        res.status(500).json({ message: 'Gagal mendaftar', error });
+        console.error("❌ Error saat registrasi:", error);
+        res.status(500).json({ message: "Gagal mendaftar", error });
     }
 });
 
@@ -296,7 +306,14 @@ router.post('/login', (req, res) => {
         return res.status(400).json({ message: 'Username dan password harus diisi' });
     }
 
-    db.query('SELECT * FROM users WHERE username = ?', [username], async (err, results) => {
+    // 🔹 Cari user dalam database
+    const query = `
+        SELECT id, username, role, is_verified, password
+        FROM users
+        WHERE username = ?
+    `;
+
+    db.query(query, [username], async (err, results) => {
         if (err || results.length === 0) {
             console.error("❌ Username atau password salah");
             return res.status(401).json({ message: 'Username atau password salah' });
@@ -315,9 +332,13 @@ router.post('/login', (req, res) => {
             return res.status(401).json({ message: 'Username atau password salah' });
         }
 
-        // 🔹 Token JWT menyimpan ID, tapi ID tidak dikirim langsung dalam response JSON
+        // 🔹 Hanya menyertakan id, role, dan is_verified dalam token JWT
         const token = jwt.sign(
-            { id: user.id, username: user.username, role: user.role, is_verified: user.is_verified }, 
+            { 
+                id: user.id, 
+                role: user.role, 
+                is_verified: user.is_verified 
+            }, 
             process.env.JWT_SECRET, 
             { expiresIn: '1h' }
         );
