@@ -232,7 +232,7 @@ router.get('/dokumen/:filename', async (req, res) => {
             <html>
             <head>
                 <meta charset="UTF-8">
-                <title>Preview Dokumen</title>
+                <title>Detail Berita</title>
                 <style>
                     body { max-width: 8.5in; margin: 0 auto; padding: 20px; }
                     img { max-width: 100%; }
