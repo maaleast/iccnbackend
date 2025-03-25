@@ -8,6 +8,8 @@ const authRoutes = require('./routes/auth');
 const memberRoutes = require('./routes/members');
 const adminRoutes = require('./routes/admin');
 const beritaRoutes = require('./routes/berita');
+const organisasiRoutes = require('./routes/organisasi');
+const pelatihanRoutes = require('./routes/pelatihan');
 
 const app = express();
 const port = process.env.PORT || 5050;
@@ -42,6 +44,8 @@ app.use('/auth', authRoutes);
 app.use('/members', memberRoutes);
 app.use('/admin', adminRoutes);
 app.use('/berita', beritaRoutes);
+app.use('/organisasi', organisasiRoutes);
+app.use('/pelatihan', pelatihanRoutes);
 
 // Jalankan server
 app.listen(port, () => {
