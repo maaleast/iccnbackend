@@ -10,6 +10,7 @@ const adminRoutes = require('./routes/admin');
 const beritaRoutes = require('./routes/berita');
 const organisasiRoutes = require('./routes/organisasi');
 const pelatihanRoutes = require('./routes/pelatihan');
+const servicesRoutes = require('./routes/services');
 
 const app = express();
 const port = process.env.PORT || 5050;
@@ -46,6 +47,7 @@ app.use('/admin', adminRoutes);
 app.use('/berita', beritaRoutes);
 app.use('/organisasi', organisasiRoutes);
 app.use('/pelatihan', pelatihanRoutes);
+app.use('/services', servicesRoutes);
 
 // Jalankan server
 app.listen(port, () => {
