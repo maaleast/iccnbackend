@@ -536,7 +536,7 @@ router.delete('/pelatihan/delete/:id', (req, res) => {
 });
 
 //=======================================================
-// Gallery / Foto
+// Gallery / Foto (Modified to match Berita's approach)
 //=======================================================
 
 // Pastikan folder uploads/gallery ada
@@ -551,13 +551,31 @@ const storage = multer.diskStorage({
         cb(null, galleryDir); // Simpan file di folder uploads/gallery
     },
     filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9); // Nama file unik
-        const ext = path.extname(file.originalname); // Ambil ekstensi file
-        cb(null, uniqueSuffix + ext); // Gabungkan nama unik dengan ekstensi
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        const ext = path.extname(file.originalname);
+        cb(null, uniqueSuffix + ext); // Nama file: timestamp-random.ekstensi
     },
 });
 
-const upload = multer({ storage });
+const upload = multer({ 
+    storage,
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Hanya file gambar yang diizinkan'), false);
+        }
+    },
+    limits: {
+        fileSize: 10 * 1024 * 1024 // 10MB
+    }
+});
+
+// Helper untuk ekstrak nama file dari URL (untuk kompatibilitas dengan data lama)
+const extractFilename = (url) => {
+    if (!url) return null;
+    return path.basename(url);
+};
 
 // **GET Semua Foto**
 router.get('/gallery', (req, res) => {
@@ -567,39 +585,54 @@ router.get('/gallery', (req, res) => {
             console.error('❌ Error mengambil data gallery:', err);
             return res.status(500).json({ message: 'Gagal mengambil data gallery' });
         }
-        res.json(results);
+        
+        // Pastikan response hanya berisi nama file (untuk kompatibilitas)
+        const modifiedResults = results.map(item => ({
+            ...item,
+            // Jika image_url sudah full URL, ekstrak nama file saja
+            image_url: extractFilename(item.image_url)
+        }));
+        
+        res.json(modifiedResults);
     });
 });
 
-// **POST Upload Foto**
 // **POST Upload Multiple Foto**
 router.post('/gallery/upload', upload.array('images', 5), (req, res) => {
     if (!req.files || req.files.length === 0) {
         return res.status(400).json({ message: 'Tidak ada file yang diunggah' });
     }
 
-    const { keterangan } = req.body; // Ambil keterangan dari body request
+    const { keterangan } = req.body;
 
-    const imageUrls = req.files.map(file => {
-        return `${req.protocol}://${req.get('host')}/uploads/gallery/${file.filename}`;
-    });
+    // Simpan hanya nama file di database
+    const imagesToSave = req.files.map(file => ({
+        filename: file.filename,
+        keterangan
+    }));
 
-    // Simpan URL gambar dan keterangan ke database
     const sql = 'INSERT INTO gallery (image_url, keterangan_foto) VALUES ?';
-    const values = imageUrls.map(url => [url, keterangan]);
+    const values = imagesToSave.map(img => [img.filename, img.keterangan]);
 
     db.query(sql, [values], (err, result) => {
         if (err) {
             console.error('❌ Gagal mengunggah foto:', err);
+            
+            // Hapus file yang sudah terupload jika gagal
+            req.files.forEach(file => {
+                fs.unlink(path.join(galleryDir, file.filename), () => {});
+            });
+            
             return res.status(500).json({ message: 'Gagal mengunggah foto' });
         }
+
         res.status(201).json({
             message: 'Foto berhasil diunggah',
-            data: imageUrls.map((url, index) => ({
-                id: result.insertId + index, // ID unik untuk setiap foto
-                image_url: url,
-                keterangan_foto: keterangan,
-            })),
+            data: imagesToSave.map((img, index) => ({
+                id: result.insertId + index,
+                image_url: img.filename, // Kembalikan hanya nama file
+                keterangan_foto: img.keterangan
+            }))
         });
     });
 });
@@ -608,12 +641,11 @@ router.post('/gallery/upload', upload.array('images', 5), (req, res) => {
 router.delete('/gallery/delete/:id', (req, res) => {
     const { id } = req.params;
 
-    // Ambil URL foto dari database
-    const sqlSelect = 'SELECT image_url FROM gallery WHERE id = ?';
-    db.query(sqlSelect, [id], (err, results) => {
+    // 1. Ambil data foto dari database
+    db.query('SELECT image_url FROM gallery WHERE id = ?', [id], (err, results) => {
         if (err) {
             console.error('❌ Gagal mengambil data foto:', err);
-            return res.status(500).json({ message: 'Gagal mengambil data foto' });
+            return res.status(500).json({ message: 'Gagal menghapus foto' });
         }
 
         if (results.length === 0) {
@@ -621,22 +653,22 @@ router.delete('/gallery/delete/:id', (req, res) => {
         }
 
         const imageUrl = results[0].image_url;
-        const filename = path.basename(imageUrl); // Ambil nama file dari URL
+        const filename = extractFilename(imageUrl); // Dapatkan nama file saja
 
-        // Hapus file dari folder uploads/gallery
+        // 2. Hapus file dari sistem
         fs.unlink(path.join(galleryDir, filename), (err) => {
-            if (err) {
+            if (err && err.code !== 'ENOENT') { // Abaikan jika file tidak ditemukan
                 console.error('❌ Gagal menghapus file:', err);
                 return res.status(500).json({ message: 'Gagal menghapus file' });
             }
 
-            // Hapus data dari database
-            const sqlDelete = 'DELETE FROM gallery WHERE id = ?';
-            db.query(sqlDelete, [id], (err, result) => {
+            // 3. Hapus dari database
+            db.query('DELETE FROM gallery WHERE id = ?', [id], (err, result) => {
                 if (err) {
-                    console.error('❌ Gagal menghapus foto:', err);
-                    return res.status(500).json({ message: 'Gagal menghapus foto' });
+                    console.error('❌ Gagal menghapus data foto:', err);
+                    return res.status(500).json({ message: 'Gagal menghapus data foto' });
                 }
+
                 res.json({ message: 'Foto berhasil dihapus' });
             });
         });
