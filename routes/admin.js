@@ -7,6 +7,8 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+const moment = require("moment");
+
 
 // Koneksi MySQL
 const db = mysql.createConnection({
@@ -463,11 +465,15 @@ router.put('/pelatihan/edit/:id', uploadPelatihan.single('upload_banner'), (req,
         return res.status(400).json({ message: 'Semua field harus diisi' });
     }
 
+    // Konversi tanggal sebelum menyimpan ke database
+    const tanggal_pelatihan_utc = moment.utc(req.body.tanggal_pelatihan).format("YYYY-MM-DD HH:mm:ss");
+    const tanggal_berakhir_utc = moment.utc(req.body.tanggal_berakhir).format("YYYY-MM-DD HH:mm:ss");
+
     // Cek apakah ingin mengupdate banner
     let sql, values;
     if (banner) {
         sql = 'UPDATE pelatihan_member SET kode = ?, judul_pelatihan = ?, tanggal_pelatihan = ?, tanggal_berakhir = ?, deskripsi_pelatihan = ?, link = ?, narasumber = ?, badge = ?, upload_banner = ? WHERE id = ?';
-        values = [kode, judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge, banner, id];
+        values = [kode, judul_pelatihan, tanggal_pelatihan_utc, tanggal_berakhir_utc, deskripsi_pelatihan, link, narasumber, badge, banner, id];
 
         // Hapus banner lama jika ada
         db.query('SELECT upload_banner FROM pelatihan_member WHERE id = ?', [id], (err, results) => {
