@@ -11,6 +11,7 @@ const beritaRoutes = require('./routes/berita');
 const organisasiRoutes = require('./routes/organisasi');
 const pelatihanRoutes = require('./routes/pelatihan');
 const servicesRoutes = require('./routes/services');
+const eventsRoutes = require('./routes/services');
 
 const app = express();
 const port = process.env.PORT || 5050;
@@ -48,22 +49,13 @@ app.use('/berita', beritaRoutes);
 app.use('/organisasi', organisasiRoutes);
 app.use('/pelatihan', pelatihanRoutes);
 app.use('/services', servicesRoutes);
+app.use('/events', eventsRoutes);
 
 // Jalankan server
 app.listen(port, () => {
     console.log(`Server running on http://localhost:${port}`);
 });
 
-// **GET ALL USERS for member dashboard
-app.get('/users', (req, res) => {
-    db.query('SELECT * FROM users', (err, results) => {
-        if (err) {
-            console.error('❌ Error fetching users:', err);
-            return res.status(500).json({ message: 'Gagal mengambil data users' });
-        }
-        res.json(results);
-    });
-});
 
 // iki gawe akses upload
 app.use('/uploads', express.static('uploads'));
