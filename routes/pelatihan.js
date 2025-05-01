@@ -162,7 +162,8 @@ router.post('/mendaftar-pelatihan', async (req, res) => {
             deskripsi_pelatihan: pelatihan.deskripsi_pelatihan,
             narasumber: pelatihan.narasumber,
             badge: pelatihan.badge,
-            status: "ongoing"
+            status: "ongoing",
+            generasi: tahunKey
         };
 
         console.log('badgeData setelah diupdate:', badgeData); // Debugging

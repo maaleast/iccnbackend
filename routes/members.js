@@ -610,7 +610,7 @@ router.get('/member-info', (req, res) => {
     }
 
     const query = `
-        SELECT no_identitas, tipe_keanggotaan, institusi, nama, nomor_wa 
+        SELECT no_identitas, tipe_keanggotaan, institusi, nama, nomor_wa, nama_generasi 
         FROM members 
         WHERE user_id = ?
     `;
