@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2');
 const router = express.Router();
+const listEndpoints = require('express-list-endpoints');
 
 const authRoutes = require('./routes/auth');
 const memberRoutes = require('./routes/members');
@@ -67,5 +68,4 @@ app.get('/users', (req, res) => {
 
 // iki gawe akses upload
 app.use('/uploads', express.static('uploads'));
-
-
+console.log(listEndpoints(app));
