@@ -3,18 +3,83 @@ const router = express.Router();
 const db = require('../db');
 const multer = require('multer');
 const path = require('path');
+const fs = require('fs');
+const mammoth = require('mammoth');
 
-// Konfigurasi Multer untuk upload gambar
+// Buat folder uploads/berita/dokumen jika belum ada
+const uploadDir = path.join(__dirname, '../uploads/berita/dokumen');
+if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Konfigurasi Multer untuk upload gambar dan dokumen
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
-        cb(null, 'uploads/berita/');
+        if (file.fieldname === 'gambar') {
+            cb(null, 'uploads/berita/'); // Simpan gambar di uploads/berita/
+        } else if (file.fieldname === 'dokumen') {
+            cb(null, 'uploads/berita/dokumen/'); // Simpan dokumen di uploads/berita/dokumen/
+        }
     },
     filename: function (req, file, cb) {
-        cb(null, Date.now() + path.extname(file.originalname));
+        cb(null, Date.now() + path.extname(file.originalname)); // Nama file unik
     }
 });
 
-const upload = multer({ storage: storage });
+// ✅ GET: Filter berita berdasarkan status
+router.get('/filter-by-status', async (req, res) => {
+    const { status } = req.query;
+
+    try {
+        let query = 'SELECT * FROM berita';
+        let params = [];
+
+        // Jika status tidak 'all', tambahkan filter ke query
+        if (status && status !== 'all') {
+            query += ' WHERE status = ?';
+            params.push(status);
+        }
+
+        // Eksekusi query
+        const [rows] = await db.promise().query(query, params);
+
+        if (rows.length === 0) {
+            return res.status(404).json({ success: false, message: 'Tidak ada berita yang ditemukan' });
+        }
+
+        res.json({ success: true, data: rows });
+    } catch (error) {
+        console.error('Error fetching filtered berita:', error);
+        res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
+    }
+});
+
+const fileFilter = (req, file, cb) => {
+    if (file.fieldname === 'gambar') {
+        if (file.mimetype.startsWith('image/')) {
+            cb(null, true);
+        } else {
+            cb(new Error('Hanya file gambar yang diizinkan'), false);
+        }
+    } else if (file.fieldname === 'dokumen') {
+        if (file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+            cb(null, true);
+        } else {
+            cb(new Error('Hanya file DOCX yang diizinkan'), false);
+        }
+    } else {
+        cb(new Error('Field tidak valid'), false);
+    }
+};
+
+const upload = multer({
+    storage: storage,
+    fileFilter: fileFilter,
+    limits: {
+        fileSize: 10 * 1024 * 1024 // 10MB
+    }
+});
+
 // ✅ GET: Semua berita dengan status yang sesuai
 router.get('/all-berita', async (req, res) => {
     try {
@@ -69,10 +134,11 @@ router.get('/detail/:id', async (req, res) => {
     }
 });
 
-// ✅ POST: Tambah berita baru dengan gambar
-router.post('/uploadberita', upload.single('gambar'), async (req, res) => {
+// ✅ POST: Tambah berita baru dengan gambar dan dokumen
+router.post('/uploadberita', upload.fields([{ name: 'gambar' }, { name: 'dokumen' }]), async (req, res) => {
     const { judul, deskripsi, waktu_tayang } = req.body;
-    const gambar = req.file ? req.file.filename : null;
+    const gambar = req.files['gambar'] ? req.files['gambar'][0].filename : null;
+    const dokumen = req.files['dokumen'] ? req.files['dokumen'][0].filename : null;
 
     if (!judul || !deskripsi || !waktu_tayang) {
         return res.status(400).json({ success: false, message: 'Judul, deskripsi, dan waktu tayang tidak boleh kosong' });
@@ -84,9 +150,9 @@ router.post('/uploadberita', upload.single('gambar'), async (req, res) => {
         const waktuTayang = new Date(waktu_tayang);
         const status = waktuTayang > now ? 'upcoming' : 'latest';
 
-        const query = `INSERT INTO berita (judul, deskripsi, waktu_tayang, gambar, status, created_at, updated_at) 
-                       VALUES (?, ?, ?, ?, ?, NOW(), NOW())`;
-        const [result] = await db.promise().execute(query, [judul, deskripsi, waktu_tayang, gambar, status]);
+        const query = `INSERT INTO berita (judul, deskripsi, waktu_tayang, gambar, dokumen, status, created_at, updated_at) 
+                       VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`;
+        const [result] = await db.promise().execute(query, [judul, deskripsi, waktu_tayang, gambar, dokumen, status]);
 
         res.json({ success: true, message: 'Berita berhasil ditambahkan', id: result.insertId });
     } catch (error) {
@@ -95,35 +161,92 @@ router.post('/uploadberita', upload.single('gambar'), async (req, res) => {
     }
 });
 
-// ✅ PUT: Edit berita berdasarkan ID dengan gambar
-router.put('/edit/:id', upload.single('gambar'), async (req, res) => {
+// ✅ PUT: Edit berita berdasarkan ID dengan gambar dan dokumen
+router.put('/edit/:id', upload.fields([{ name: 'gambar' }, { name: 'dokumen' }]), async (req, res) => {
     const { id } = req.params;
-    const { judul, deskripsi, waktu_tayang, status, gambar_lama } = req.body;
-    const gambar = req.file ? req.file.filename : gambar_lama;
+    const { judul, deskripsi, waktu_tayang, status, gambar_lama, dokumen_lama } = req.body;
+    
+    // Get uploaded files
+    const gambar = req.files['gambar'] ? req.files['gambar'][0].filename : gambar_lama;
+    const dokumen = req.files['dokumen'] ? req.files['dokumen'][0].filename : dokumen_lama;
 
     if (!judul || !deskripsi || !status) {
         return res.status(400).json({ success: false, message: 'Judul, deskripsi, dan status harus diisi' });
     }
 
     try {
-        // Cek apakah ID berita ada di database
+        // Check if news exists
         const [cekBerita] = await db.promise().query('SELECT * FROM berita WHERE id = ?', [id]);
-
         if (cekBerita.length === 0) {
             return res.status(404).json({ success: false, message: 'Berita tidak ditemukan' });
         }
 
-        // Gunakan waktu_tayang yang sudah ada jika tidak diubah
-        const waktuTayang = waktu_tayang || cekBerita[0].waktu_tayang;
+        // Format the datetime properly
+        let formattedWaktuTayang;
+        try {
+            formattedWaktuTayang = new Date(waktu_tayang).toISOString().slice(0, 19).replace('T', ' ');
+        } catch (e) {
+            formattedWaktuTayang = cekBerita[0].waktu_tayang;
+        }
 
-        const query = `UPDATE berita SET judul = ?, deskripsi = ?, waktu_tayang = ?, gambar = ?, status = ?, updated_at = NOW() 
-                       WHERE id = ?`;
-        const [result] = await db.promise().execute(query, [judul, deskripsi, waktuTayang, gambar, status, id]);
+        // Update query
+        const query = `UPDATE berita 
+                      SET judul = ?, deskripsi = ?, waktu_tayang = ?, 
+                          gambar = ?, dokumen = ?, status = ?, 
+                          updated_at = NOW() 
+                      WHERE id = ?`;
+        
+        const [result] = await db.promise().execute(
+            query, 
+            [judul, deskripsi, formattedWaktuTayang, gambar, dokumen, status, id]
+        );
 
-        res.json({ success: true, message: 'Berita berhasil diperbarui' });
+        // Delete old files if new ones were uploaded
+        if (req.files['gambar'] && gambar_lama) {
+            const oldImagePath = path.join(__dirname, '../uploads/berita', gambar_lama);
+            if (fs.existsSync(oldImagePath)) {
+                fs.unlinkSync(oldImagePath);
+            }
+        }
+        if (req.files['dokumen'] && dokumen_lama) {
+            const oldDocPath = path.join(__dirname, '../uploads/berita/dokumen', dokumen_lama);
+            if (fs.existsSync(oldDocPath)) {
+                fs.unlinkSync(oldDocPath);
+            }
+        }
+
+        res.json({ 
+            success: true, 
+            message: 'Berita berhasil diperbarui',
+            data: {
+                id,
+                judul,
+                gambar,
+                dokumen
+            }
+        });
     } catch (error) {
         console.error('Error updating berita:', error);
-        res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
+        
+        // Clean up uploaded files if error occurred
+        if (req.files['gambar']) {
+            const tempPath = path.join(__dirname, '../uploads/berita', req.files['gambar'][0].filename);
+            if (fs.existsSync(tempPath)) {
+                fs.unlinkSync(tempPath);
+            }
+        }
+        if (req.files['dokumen']) {
+            const tempPath = path.join(__dirname, '../uploads/berita/dokumen', req.files['dokumen'][0].filename);
+            if (fs.existsSync(tempPath)) {
+                fs.unlinkSync(tempPath);
+            }
+        }
+        
+        res.status(500).json({ 
+            success: false, 
+            message: 'Terjadi kesalahan pada server',
+            error: error.message
+        });
     }
 });
 
@@ -148,6 +271,44 @@ router.delete('/hapus/:id', async (req, res) => {
         res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
     }
 });
+
+// ✅ GET: Konversi dokumen ke HTML
+router.get('/dokumen/:filename', async (req, res) => {
+    try {
+        const filename = req.params.filename;
+        const filePath = path.join(__dirname, '../uploads/berita/dokumen', filename); // Sesuaikan path
+        
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).send('Dokumen tidak ditemukan');
+        }
+
+        const result = await mammoth.convertToHtml({ path: filePath });
+        const html = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <title>Detail Berita</title>
+                <style>
+                    body { max-width: 8.5in; margin: 0 auto; padding: 20px; }
+                    img { max-width: 100%; }
+                    table { border-collapse: collapse; }
+                    td, th { border: 1px solid #ddd; padding: 8px; }
+                </style>
+            </head>
+            <body>
+                ${result.value}
+            </body>
+            </html>
+        `;
+
+        res.send(html);
+    } catch (error) {
+        console.error('Error converting DOCX:', error);
+        res.status(500).send('Gagal mengonversi dokumen');
+    }
+});
+
 
 // ✅ PUT: Arsipkan berita berdasarkan ID
 router.put('/:id/archive', async (req, res) => {
@@ -189,6 +350,14 @@ router.put('/:id/branding', async (req, res) => {
     const { id } = req.params;
 
     try {
+        // Ambil data berita dari database
+        const [berita] = await db.promise().query('SELECT * FROM berita WHERE id = ?', [id]);
+
+        if (berita.length === 0) {
+            return res.status(404).json({ success: false, message: 'Berita tidak ditemukan' });
+        }
+
+        // Update status menjadi branding
         const query = `UPDATE berita SET status = 'branding', updated_at = NOW() WHERE id = ?`;
         const [result] = await db.promise().execute(query, [id]);
 
@@ -203,33 +372,10 @@ router.put('/:id/branding', async (req, res) => {
     }
 });
 
-// ✅ GET: Filter berita berdasarkan status
-router.get('/filter-by-status', async (req, res) => {
-    const { status } = req.query; // Ambil parameter status dari query string
-
-    try {
-        let query = 'SELECT * FROM berita';
-
-        // Jika status diberikan, tambahkan kondisi WHERE
-        if (status && status !== 'all') {
-            query += ' WHERE status = ?';
-        }
-
-        query += ' ORDER BY created_at DESC'; // Urutkan berdasarkan created_at DESC
-
-        // Eksekusi query dengan atau tanpa parameter status
-        const [rows] = await db.promise().query(query, status && status !== 'all' ? [status] : []);
-
-        res.json({ success: true, data: rows });
-    } catch (error) {
-        console.error('Error filtering berita by status:', error);
-        res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
-    }
-});
-
 // ✅ PUT: Update status berita (arsipkan, batal arsip, branding, nonaktifkan branding)
 router.put('/:id/update-status', async (req, res) => {
     const { id } = req.params;
+    const { status } = req.body;
 
     try {
         // Ambil data berita dari database
@@ -239,33 +385,21 @@ router.put('/:id/update-status', async (req, res) => {
             return res.status(404).json({ success: false, message: 'Berita tidak ditemukan' });
         }
 
-        const now = new Date();
-        const waktu_tayang = new Date(berita[0].waktu_tayang);
-
-        // Tentukan status baru berdasarkan status saat ini
-        let newStatus;
-        if (berita[0].status === 'archived') {
-            // Jika status saat ini adalah archived, ubah ke latest atau upcoming
-            newStatus = waktu_tayang <= now ? 'latest' : 'upcoming';
-        } else if (berita[0].status === 'branding') {
-            // Jika status saat ini adalah branding, ubah ke latest
-            newStatus = 'latest';
-        } else if (berita[0].status === 'latest' || berita[0].status === 'upcoming') {
-            // Jika status saat ini adalah latest atau upcoming, ubah ke branding
-            newStatus = 'branding';
-        } else {
-            return res.status(400).json({ success: false, message: 'Status tidak valid untuk diperbarui' });
+        // Validasi status yang diizinkan
+        const allowedStatuses = ['latest', 'upcoming', 'archived', 'branding'];
+        if (!allowedStatuses.includes(status)) {
+            return res.status(400).json({ success: false, message: 'Status tidak valid' });
         }
 
         // Update status di database
         const query = `UPDATE berita SET status = ?, updated_at = NOW() WHERE id = ?`;
-        const [result] = await db.promise().execute(query, [newStatus, id]);
+        const [result] = await db.promise().execute(query, [status, id]);
 
         if (result.affectedRows === 0) {
             return res.status(404).json({ success: false, message: 'Berita tidak ditemukan' });
         }
 
-        res.json({ success: true, message: 'Status berita berhasil diperbarui', newStatus });
+        res.json({ success: true, message: 'Status berita berhasil diperbarui', newStatus: status });
     } catch (error) {
         console.error('Error updating status:', error);
         res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });

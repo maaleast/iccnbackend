@@ -107,7 +107,51 @@ router.get('/checkUserRole', (req, res) => {
     });
 });
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+// UNTUK REGISTER MEMBERRRRRRRRR
 // **REGISTER MEMBER**
+// Endpoint untuk menambahkan saldo dari daftar member
+router.post('/addsaldomember', async (req, res) => {
+    try {
+        console.log("Data yang diterima di /addsaldomember:", req.body);
+
+        const { nominal_transfer, no_identitas, nama_kuitansi, nama } = req.body;
+
+        // Validasi input
+        if (!nominal_transfer || !no_identitas || !nama_kuitansi || !nama) {
+            return res.status(400).json({ message: 'Semua field wajib diisi!' });
+        }
+
+        // Catat pendapatan ke tabel admin_laporan_keuangan
+        await db.promise().query(
+            'INSERT INTO admin_laporan_keuangan (status, jumlah, deskripsi, tanggal_waktu) VALUES (?, ?, ?, ?)',
+            ['MASUK', nominal_transfer, `Saldo bertambah dari pendaftaran member ${no_identitas} (${nama_kuitansi}) dari member bernama ${nama}`, new Date().toISOString()]
+        );
+
+        console.log("Saldo berhasil ditambahkan ke database.");
+        res.status(201).json({ message: 'Saldo berhasil ditambahkan' });
+    } catch (err) {
+        console.error('Error saat menambahkan saldo:', err);
+        res.status(500).json({ message: 'Gagal menambahkan saldo', error: err });
+    }
+});
+
+// ===================================
+// endpoint daftar form member
+
 router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'bukti_pembayaran' }, { name: 'logo' }]), async (req, res) => {
     try {
         const { tipe_keanggotaan, institusi, website, email, alamat, wilayah, name, nominal_transfer, nomor_wa, nama_kuitansi } = req.body;
@@ -123,81 +167,73 @@ router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'buk
         }
 
         // Ambil user_id berdasarkan email
-        db.query('SELECT id FROM users WHERE email = ?', [email], async (err, results) => {
-            if (err) {
-                console.error('Error saat mengambil user_id:', err);
-                return res.status(500).json({ message: 'Gagal mengambil user_id', error: err });
-            }
-            if (results.length === 0) {
-                return res.status(404).json({ message: 'User dengan email tersebut tidak ditemukan' });
-            }
+        const [userResults] = await db.promise().query('SELECT id FROM users WHERE email = ?', [email]);
+        if (userResults.length === 0) {
+            return res.status(404).json({ message: 'User dengan email tersebut tidak ditemukan' });
+        }
 
-            const user_id = results[0].id; // Ambil id dari hasil query
+        const user_id = userResults[0].id;
 
-            // Simpan path file yang diunggah
-            const fileSkPath = `/uploads/file_sk/${req.files['file_sk'][0].filename}`;
-            const buktiPembayaranPath = `/uploads/bukti_pembayaran/${req.files['bukti_pembayaran'][0].filename}`;
-            const logoPath = req.files['logo'] ? `/uploads/${tipe_keanggotaan.toLowerCase()}/${req.files['logo'][0].filename}` : null;
+        // Simpan path file yang diunggah
+        const fileSkPath = `/uploads/file_sk/${req.files['file_sk'][0].filename}`;
+        const buktiPembayaranPath = `/uploads/bukti_pembayaran/${req.files['bukti_pembayaran'][0].filename}`;
+        const logoPath = req.files['logo'] ? `/uploads/${tipe_keanggotaan.toLowerCase()}/${req.files['logo'][0].filename}` : null;
 
-            additional_members_info = additional_members_info ? additional_members_info : null;
+        additional_members_info = additional_members_info || null;
 
-            const tanggalSubmit = new Date();
-            const masaAktif = new Date(tanggalSubmit);
-            masaAktif.setFullYear(masaAktif.getFullYear() + 1);
-            const masaAktifFormatted = masaAktif.toISOString().split('T')[0];
+        const tanggalSubmit = new Date();
+        const masaAktif = new Date(tanggalSubmit);
+        masaAktif.setFullYear(masaAktif.getFullYear() + 1);
+        const masaAktifFormatted = masaAktif.toISOString().split('T')[0];
 
-            // Generate no_identitas
-            const no_identitas = await generateUniqueIdentitas(tipe_keanggotaan);
+        // Generate no_identitas
+        const no_identitas = await generateUniqueIdentitas(tipe_keanggotaan);
 
+        // Mulai transaction
+        const connection = await db.promise().getConnection();
+        await connection.beginTransaction();
+
+        try {
             // Insert ke tabel members
-            db.query(
-                'INSERT INTO members (user_id, no_identitas, tipe_keanggotaan, institusi, website, email, alamat, wilayah, name, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, file_sk, bukti_pembayaran, logo, status_verifikasi, tanggal_submit, masa_aktif) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "PENDING", NOW(), ?)',
-                [user_id, no_identitas, tipe_keanggotaan, institusi, website, email, alamat, wilayah, name, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, fileSkPath, buktiPembayaranPath, logoPath, masaAktifFormatted],
-                async (err, result) => {
-                    if (err) {
-                        console.error('Error saat mendaftar member:', err);
-                        return res.status(500).json({ message: 'Gagal mendaftar sebagai member', error: err });
-                    }
-
-                    // Update role pengguna menjadi 'member'
-                    db.query('UPDATE users SET role = "member" WHERE id = ?', [user_id], async (err, result) => {
-                        if (err) {
-                            console.error('Error saat memperbarui role pengguna:', err);
-                            return res.status(500).json({ message: 'Gagal memperbarui role pengguna', error: err });
-                        }
-
-                        // Catat pendapatan dari registrasi ke tabel admin_laporan_keuangan
-                        try {
-                            // Ambil saldo terakhir
-                            const saldoTerakhir = await getLastBalance();
-
-                            // Hitung saldo baru
-                            const saldoBaru = saldoTerakhir + parseFloat(nominal_transfer);
-
-                            // Simpan data ke tabel admin_laporan_keuangan
-                            await db.promise().query(
-                                'INSERT INTO admin_laporan_keuangan (status, jumlah, deskripsi, tanggal_waktu, saldo_akhir) VALUES (?, ?, ?, ?, ?)',
-                                ['MASUK', nominal_transfer, `Pendaftaran Member - ${institusi}`, new Date().toISOString(), saldoBaru]
-                            );
-
-                            res.status(201).json({ 
-                                message: 'Pendaftaran member berhasil, menunggu verifikasi', 
-                                file_sk: fileSkPath, 
-                                bukti_pembayaran: buktiPembayaranPath, 
-                                logo: logoPath,
-                                masa_aktif: masaAktifFormatted,
-                            });
-                        } catch (error) {
-                            console.error('Error saat mencatat pendapatan:', error);
-                            return res.status(500).json({ message: 'Gagal mencatat pendapatan', error: error });
-                        }
-                    });
-                }
+            await connection.query(
+                `INSERT INTO members 
+                (user_id, no_identitas, tipe_keanggotaan, institusi, website, email, alamat, wilayah, name, 
+                nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, file_sk, bukti_pembayaran, 
+                logo, status_verifikasi, tanggal_submit, masa_aktif) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "PENDING", NOW(), ?)`,
+                [user_id, no_identitas, tipe_keanggotaan, institusi, website, email, alamat, wilayah, name, 
+                nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, fileSkPath, 
+                buktiPembayaranPath, logoPath, masaAktifFormatted]
             );
-        });
+
+            // Update role pengguna
+            await connection.query('UPDATE users SET role = "member" WHERE id = ?', [user_id]);
+
+            // Jika ada proses pencatatan pendapatan, bisa ditambahkan di sini
+            // await catatPendapatan(...);
+
+            await connection.commit();
+
+            res.status(201).json({ 
+                message: 'Pendaftaran member berhasil, menunggu verifikasi', 
+                file_sk: fileSkPath, 
+                bukti_pembayaran: buktiPembayaranPath, 
+                logo: logoPath,
+                masa_aktif: masaAktifFormatted,
+                no_identitas: no_identitas
+            });
+
+        } catch (error) {
+            await connection.rollback();
+            console.error('Error saat proses pendaftaran:', error);
+            res.status(500).json({ message: 'Gagal mendaftar sebagai member', error: error.message });
+        } finally {
+            connection.release();
+        }
+
     } catch (err) {
         console.error('Error saat mendaftar member:', err);
-        res.status(500).json({ message: 'Gagal mendaftar sebagai member', error: err });
+        res.status(500).json({ message: 'Gagal memproses pendaftaran', error: err.message });
     }
 });
 
@@ -223,6 +259,9 @@ router.post('/request-perpanjang', upload.single('bukti_pembayaran_perpanjang'),
         }
     );
 });
+
+
+
 
 // **VERIFIKASI MEMBER (ADMIN)**
 router.put('/verify-member/:member_id', (req, res) => {
@@ -292,35 +331,99 @@ router.post('/checkRegistrationStatus', (req, res) => {
 router.post('/mendaftar-pelatihan', (req, res) => {
     const { pelatihan_id, member_id } = req.body;
 
-    db.query(
-        'SELECT * FROM pelatihan_member WHERE id = ?',
-        [pelatihan_id],
-        (err, results) => {
+    db.beginTransaction(err => {
+        if (err) {
+            console.error('❌ Error starting transaction:', err);
+            return res.status(500).json({ message: 'Failed to start transaction' });
+        }
+
+        // 1. Cek apakah pelatihan ada
+        db.query('SELECT * FROM pelatihan_member WHERE id = ?', [pelatihan_id], (err, pelatihanResults) => {
             if (err) {
-                console.error('❌ Error query pelatihan:', err);
-                return res.status(500).json({ message: 'Gagal mendaftar pelatihan' });
+                console.error('❌ Query failed:', err);
+                return db.rollback(() => res.status(500).json({ message: 'Query failed', error: err }));
+            }
+            if (pelatihanResults.length === 0) {
+                return db.rollback(() => res.status(404).json({ message: 'Pelatihan tidak ditemukan' }));
             }
 
-            if (results.length === 0) {
-                return res.status(404).json({ message: 'Pelatihan tidak ditemukan' });
-            }
+            const pelatihan = pelatihanResults[0];
 
-            const { id, ...pelatihan } = results[0]; // Exclude 'kode' from the response
+            // 2. Cek apakah member ada di database
+            db.query('SELECT no_identitas, badge FROM members WHERE id = ?', [member_id], (err, memberResults) => {
+                if (err) {
+                    console.error('❌ Query failed:', err);
+                    return db.rollback(() => res.status(500).json({ message: 'Query failed', error: err }));
+                }
+                if (memberResults.length === 0) {
+                    return db.rollback(() => res.status(404).json({ message: 'Member tidak ditemukan' }));
+                }
 
-            db.query(
-                'INSERT INTO peserta_pelatihan (pelatihan_id, member_id) VALUES (?, ?)',
-                [pelatihan_id, member_id],
-                (err) => {
+                const member = memberResults[0];
+                const noIdentitas = member.no_identitas;
+                const tahunKey = noIdentitas.split('.').pop();
+                let badgeData = {};
+
+                try {
+                    if (typeof member.badge === 'string' && member.badge.trim() !== '') {
+                        const parsedBadge = JSON.parse(member.badge);
+                        if (parsedBadge && typeof parsedBadge === 'object' && !Array.isArray(parsedBadge)) {
+                            badgeData = parsedBadge; // Gunakan badge dari DB jika valid
+                        }
+                    }
+                } catch (parseError) {
+                    console.error('❌ Error parsing badge data:', parseError, 'Raw badge data:', member.badge);
+                    return db.rollback(() => res.status(500).json({ message: 'Gagal memproses data badge', rawData: member.badge }));
+                }
+
+                // Pastikan `badgeData[tahunKey]` ada
+                if (!badgeData[tahunKey]) {
+                    badgeData[tahunKey] = {};
+                }
+
+                const existingEntries = Object.values(badgeData[tahunKey]).map(p => p.pelatihan_id);
+                if (existingEntries.includes(pelatihan_id)) {
+                    return db.rollback(() => res.status(400).json({ message: 'Member sudah terdaftar di pelatihan ini' }));
+                }
+
+                // 3. Tambahkan pelatihan ke dalam data badge
+                const newIndex = Object.keys(badgeData[tahunKey]).length;
+                badgeData[tahunKey][newIndex] = {
+                    pelatihan_id: pelatihan.id,
+                    judul_pelatihan: pelatihan.judul_pelatihan,
+                    deskripsi_pelatihan: pelatihan.deskripsi_pelatihan,
+                    narasumber: pelatihan.narasumber,
+                    badge: pelatihan.badge,
+                    status: "ongoing"
+                };
+
+                // 4. Simpan pendaftaran ke peserta_pelatihan
+                db.query('INSERT INTO peserta_pelatihan (pelatihan_id, member_id) VALUES (?, ?)', [pelatihan_id, member_id], (err) => {
                     if (err) {
-                        console.error('❌ Error mendaftar pelatihan:', err);
-                        return res.status(500).json({ message: 'Gagal mendaftar pelatihan' });
+                        console.error('❌ Error inserting peserta_pelatihan:', err);
+                        return db.rollback(() => res.status(500).json({ message: 'Gagal mendaftarkan pelatihan', error: err }));
                     }
 
-                    res.json({ message: 'Berhasil mendaftar pelatihan', pelatihan });
-                }
-            );
-        }
-    );
+                    // 5. Update badge di tabel members
+                    db.query('UPDATE members SET badge = ? WHERE id = ?', [JSON.stringify(badgeData), member_id], (err) => {
+                        if (err) {
+                            console.error('❌ Error updating badge:', err);
+                            return db.rollback(() => res.status(500).json({ message: 'Gagal memperbarui badge', error: err }));
+                        }
+
+                        // 6. Commit transaksi
+                        db.commit(err => {
+                            if (err) {
+                                console.error('❌ Error committing transaction:', err);
+                                return db.rollback(() => res.status(500).json({ message: 'Gagal menyimpan perubahan', error: err }));
+                            }
+                            res.json({ message: 'Berhasil mendaftar pelatihan', badge: badgeData });
+                        });
+                    });
+                });
+            });
+        });
+    });
 });
 
 // Endpoint untuk menyelesaikan pelatihan
@@ -436,8 +539,6 @@ router.get('/badge/:user_id', (req, res) => {
     );
 });
 
-
-
 // **CEK STATUS VERIFIKASI**
 router.get('/checkVerificationStatus/:user_id', (req, res) => {
     const { user_id } = req.params;
@@ -499,29 +600,34 @@ router.get('/checkVerificationStatus/:user_id', (req, res) => {
 
 //Mengambil beberapa info member untuk setting member dashboard
 router.get('/member-info', (req, res) => {
-    const userId = req.query.user_id; // Ambil user_id dari query parameter
+    const userId = req.query.user_id;
+    
+    console.log("📥 Request received for user_id:", userId); // Debugging log
 
     if (!userId) {
+        console.error("❌ User ID tidak ditemukan dalam request");
         return res.status(400).json({ message: 'User ID tidak ditemukan' });
     }
 
     const query = `
-        SELECT tipe_keanggotaan, institusi, name, nomor_wa 
+        SELECT no_identitas, tipe_keanggotaan, institusi, nama, nomor_wa 
         FROM members 
         WHERE user_id = ?
     `;
 
     db.query(query, [userId], (err, results) => {
         if (err) {
-            console.error('❌ Error mengambil data member:', err);
+            console.error("❌ Error SQL:", err);
             return res.status(500).json({ message: 'Gagal mengambil data member' });
         }
+
+        console.log("📡 Query results:", results);
 
         if (results.length === 0) {
             return res.status(404).json({ message: 'Data member tidak ditemukan' });
         }
 
-        res.json(results[0]); // Mengembalikan data member
+        res.json(results[0]);
     });
 });
 
