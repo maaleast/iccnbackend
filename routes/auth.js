@@ -40,7 +40,7 @@ const storage = multer.diskStorage({
             uploadPath = path.join(uploadPath, 'bukti_pembayaran');
         } else if (file.fieldname === 'logo') {
             // Pastikan tipe_keanggotaan ada dalam request
-            const tipeKeanggotaan = req.body.userTypen ? req.body.userType.toLowerCase().replace(/\s+/g, '_') : 'default';
+            const tipeKeanggotaan = req.body.userType ? req.body.userType.toLowerCase().replace(/\s+/g, '_') : 'default';
             uploadPath = path.join(uploadPath, tipeKeanggotaan, 'logo');
         }
 
@@ -133,116 +133,141 @@ router.post('/register', async (req, res) => {
 });
 
 // 📌 REGISTER MEMBER
-router.post("/register-member", upload.fields([{ name: "file_sk" }, { name: "bukti_pembayaran" }, { name: "logo" }]), async (req, res) => {
-    try {
-        console.log("🔹 Register-Member route hit");
-        console.log("🛠 Body:", req.body);
-        console.log("🛠 Files:", req.files);
-
-        const { username, email, password, userType, institutionName, websiteLink, address, region, personalName, transferAmount, whatsappGroupNumber, receiptName } = req.body;
+router.post(
+    "/register-member",
+    upload.fields([{ name: "file_sk" }, { name: "bukti_pembayaran" }, { name: "logo" }]),
+    async (req, res) => {
+      console.time("⏱️ Total waktu proses register-member");
+  
+      try {
+        console.time("🔍 Validasi input");
+        const {
+          username, email, password, userType, institutionName, websiteLink, address,
+          region, personalName, transferAmount, whatsappGroupNumber, receiptName
+        } = req.body;
+  
         let { additional_members_info } = req.body;
-
-        // 🔍 Validasi Input
+  
         if (!username || !email || !password || !userType || !transferAmount) {
-            return res.status(400).json({ message: "Semua field wajib diisi!" });
+          return res.status(400).json({ message: "Semua field wajib diisi!" });
         }
-
+  
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(email)) {
-            return res.status(400).json({ message: "Format email tidak valid!" });
+          return res.status(400).json({ message: "Format email tidak valid!" });
         }
-
+  
         const waRegex = /^[0-9]+$/;
         if (whatsappGroupNumber && !waRegex.test(whatsappGroupNumber)) {
-            return res.status(400).json({ message: "Nomor WA hanya boleh berisi angka!" });
+          return res.status(400).json({ message: "Nomor WA hanya boleh berisi angka!" });
         }
-
-        // 🔍 Cek apakah email sudah terdaftar
+        console.timeEnd("🔍 Validasi input");
+  
+        console.time("🔎 Cek email duplikat");
         const [existingUsers] = await db.promise().query("SELECT id FROM users WHERE email = ?", [email]);
         if (existingUsers.length > 0) {
-            return res.status(400).json({ message: "Email sudah terdaftar!" });
+          return res.status(400).json({ message: "Email sudah terdaftar!" });
         }
-
-        // 🔑 Hash Password
-        const hashedPassword = await bcrypt.hash(password, 12);
+        console.timeEnd("🔎 Cek email duplikat");
+  
+        console.time("🔑 Hash password + token");
+        const hashedPassword = await bcrypt.hash(password, 10);
         const verificationToken = uuidv4();
-
-        // 🔍 Cek apakah file wajib diunggah
+        console.timeEnd("🔑 Hash password + token");
+  
         if (!req.files || !req.files["file_sk"] || !req.files["bukti_pembayaran"]) {
-            return res.status(400).json({ message: "File SK dan Bukti Pembayaran harus diunggah!" });
+          return res.status(400).json({ message: "File SK dan Bukti Pembayaran harus diunggah!" });
         }
-
+  
+        console.time("📁 Simpan file path");
         const fileSkPath = `/uploads/file_sk/${req.files["file_sk"][0].filename}`;
         const buktiPembayaranPath = `/uploads/bukti_pembayaran/${req.files["bukti_pembayaran"][0].filename}`;
-
         let logoPath = null;
         if (req.files["logo"]) {
-            const userTypeDir = userType.toLowerCase().replace(/\s+/g, "_");
-            logoPath = `/uploads/${userTypeDir}/logo/${req.files["logo"][0].filename}`;
+          const userTypeDir = userType.toLowerCase().replace(/\s+/g, "_");
+          logoPath = `/uploads/${userTypeDir}/logo/${req.files["logo"][0].filename}`;
         }
-
+        console.timeEnd("📁 Simpan file path");
+  
+        console.time("🔢 Generate no_identitas");
         additional_members_info = additional_members_info || null;
         const no_identitas = await generateUniqueIdentitas(userType);
-
+        console.timeEnd("🔢 Generate no_identitas");
+  
+        const idAkhir = no_identitas.slice(-2);
+        const namaGenerasi = {
+          [idAkhir]: {
+            name: personalName,
+            timestamp: new Date().toISOString(),
+          },
+        };
+  
         const tanggalSubmit = new Date();
         const masaAktif = new Date(tanggalSubmit);
         masaAktif.setFullYear(masaAktif.getFullYear() + 1);
         const masaAktifFormatted = masaAktif.toISOString().split("T")[0];
-
-        // 🔥 Transaksi Database untuk menghindari corrupt data
+  
+        console.time("💾 Simpan ke DB (users + members + laporan)");
         await db.promise().beginTransaction();
-
-        // Insert ke table users
-        const [userResult] = await db.promise().query(
+  
+        const [userResult] = await db
+          .promise()
+          .query(
             "INSERT INTO users (username, email, password, verification_token, is_verified, role) VALUES (?, ?, ?, ?, ?, ?)",
             [username, email, hashedPassword, verificationToken, false, "member"]
-        );
-
+          );
+  
         const user_id = userResult.insertId;
-
-        // Insert ke table members
+  
         await db.promise().query(
-            "INSERT INTO members (user_id, no_identitas, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama, nominal_transfer, nomor_wa, nama_kuitansi, additional_members_info, file_sk, bukti_pembayaran, logo, status_verifikasi, tanggal_submit, masa_aktif, badge) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NOW(), ?, ?)",
-            [user_id, no_identitas, userType, institutionName, websiteLink, email, address, region, personalName, transferAmount, whatsappGroupNumber, receiptName, additional_members_info, fileSkPath, buktiPembayaranPath, logoPath, masaAktifFormatted, "{}"]
+          `INSERT INTO members (
+            user_id, no_identitas, tipe_keanggotaan, institusi, website, email, alamat, wilayah, nama, nominal_transfer,
+            nomor_wa, nama_kuitansi, additional_members_info, file_sk, bukti_pembayaran, logo, status_verifikasi,
+            tanggal_submit, masa_aktif, badge, nama_generasi
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', NOW(), ?, ?, ?)`,
+          [
+            user_id, no_identitas, userType, institutionName, websiteLink, email, address, region, personalName,
+            transferAmount, whatsappGroupNumber, receiptName, additional_members_info,
+            fileSkPath, buktiPembayaranPath, logoPath, masaAktifFormatted, "{}", JSON.stringify(namaGenerasi),
+          ]
         );
-
-        // Catat pendapatan dari registrasi ke tabel admin_laporan_keuangan
+  
         const deskripsi = `Pendaftaran Member dari ${no_identitas}, dengan nama ${personalName}, Nama kuitansinya ${receiptName}`;
         await db.promise().query(
-            "INSERT INTO admin_laporan_keuangan (status, jumlah, deskripsi, tanggal_waktu) VALUES (?, ?, ?, NOW())",
-            ["MASUK", transferAmount, deskripsi]
+          "INSERT INTO admin_laporan_keuangan (status, jumlah, deskripsi, tanggal_waktu) VALUES (?, ?, ?, NOW())",
+          ["MASUK", transferAmount, deskripsi]
         );
-
-        // 🔹 Kirim Email Verifikasi
-        try {
-            await transporter.sendMail({
-                from: process.env.SMTP_EMAIL,
-                to: email,
-                subject: "Verifikasi Akun ICCN",
-                html: `<p>Terima kasih telah mendaftar sebagai member ICCN. Klik <a href="${process.env.BASE_URL}/auth/verify?token=${verificationToken}">di sini</a> untuk verifikasi akun Anda.</p>`,
-            });
-
-            await db.promise().commit();
-
-            res.status(201).json({
-                message: "Pendaftaran member berhasil! Silakan cek email untuk verifikasi.",
-                file_sk: fileSkPath,
-                bukti_pembayaran: buktiPembayaranPath,
-                logo: logoPath,
-                masa_aktif: masaAktifFormatted,
-                no_identitas: no_identitas,
-            });
-        } catch (emailError) {
-            await db.promise().rollback(); // Rollback jika gagal kirim email
-            console.error("❌ Gagal mengirim email:", emailError);
-            res.status(500).json({ message: "Gagal mengirim email verifikasi, coba lagi nanti." });
-        }
-    } catch (error) {
+        console.timeEnd("💾 Simpan ke DB (users + members + laporan)");
+  
+        console.time("📨 Kirim email verifikasi");
+        await transporter.sendMail({
+          from: process.env.SMTP_EMAIL,
+          to: email,
+          subject: "Verifikasi Akun ICCN",
+          html: `<p>Terima kasih telah mendaftar sebagai member ICCN. Klik <a href="${process.env.BASE_URL}/auth/verify?token=${verificationToken}">di sini</a> untuk verifikasi akun Anda.</p>`,
+        });
+        console.timeEnd("📨 Kirim email verifikasi");
+  
+        await db.promise().commit();
+  
+        console.timeEnd("⏱️ Total waktu proses register-member");
+  
+        return res.status(201).json({
+          message: "Pendaftaran member berhasil! Silakan cek email untuk verifikasi.",
+          file_sk: fileSkPath,
+          bukti_pembayaran: buktiPembayaranPath,
+          logo: logoPath,
+          masa_aktif: masaAktifFormatted,
+          no_identitas: no_identitas,
+        });
+      } catch (error) {
         await db.promise().rollback();
         console.error("❌ Error saat registrasi:", error);
-        res.status(500).json({ message: "Gagal mendaftar", error });
+        console.timeEnd("⏱️ Total waktu proses register-member");
+        return res.status(500).json({ message: "Gagal mendaftar", error });
+      }
     }
-});
+);  
 
 // **VERIFIKASI EMAIL**
 router.get('/verify', (req, res) => {
