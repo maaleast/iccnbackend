@@ -21,6 +21,7 @@ app.use(cors());
 app.use(express.json()); // HARUS di atas route
 
 // Koneksi MySQL
+// Koneksi MySQL
 const db = mysql.createPool({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
@@ -28,7 +29,9 @@ const db = mysql.createPool({
     database: process.env.DB_NAME,
     waitForConnections: true,
     connectionLimit: 10,
-    queueLimit: 0
+    queueLimit: 0,
+    connectTimeout: 20000,
+    acquireTimeout: 20000 
 });
 
 // Tes koneksi dan setup ping connection
