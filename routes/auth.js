@@ -156,7 +156,12 @@ router.post(
         logoPath = `/uploads/${userTypeDir}/logo/${req.files["logo"][0].filename}`;
       }
 
-      additional_members_info = additional_members_info || null;
+      if (!additional_members_info || additional_members_info.trim() === "") {
+          additional_members_info = null;
+        } else {
+            additional_members_info = additional_members_info;
+      }
+
 
       // Generate no_identitas (gunakan connection yang sama)
       async function generateUniqueIdentitasWithConn(userType) {
@@ -319,16 +324,22 @@ router.post('/login', async (req, res) => {
     }
 
     try {
-        const results = await db.query(
-        `SELECT id, username, role, is_verified, password FROM users WHERE username = ?`, [username]
+        const [rows] = await db.query(
+            `SELECT id, username, role, is_verified, password FROM users WHERE username = ?`, 
+            [username]
         );
 
-        if (results.length === 0) {
+        if (rows.length === 0) {
             console.warn("❌ Username tidak ditemukan");
             return res.status(401).json({ message: 'Username atau password salah' });
         }
 
-        const user = results[0];
+        const user = rows[0];
+
+        if (!user.password) {
+            console.warn("❌ User tidak memiliki password");
+            return res.status(500).json({ message: 'Password tidak tersedia untuk akun ini' });
+        }
 
         if (user.is_verified === 0) {
             console.warn("⚠️ Akun belum diverifikasi");
