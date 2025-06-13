@@ -46,13 +46,18 @@ db.getConnection()
                 await db.query('SELECT 1');
                 // console.log('Ping sukses');
             } catch (err) {
-                console.error('Keep-alive error:', err);
+                console.error('Keep-alive error, reconnecting...: ', err);
             }
         }, 5 * 60 * 1000);
     })
     .catch(err => {
         console.error('❌ Error pool connecting to database:', err);
     });
+
+// Ping connection untuk memastikan server tetap hidup
+app.get('/ping', (req, res) => {
+  res.send('pong');
+});
 
 // **ROUTE UTAMA**
 app.get('/', (req, res) => {
