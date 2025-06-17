@@ -3,6 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const db = require('../db');
 const jwt = require('jsonwebtoken');
+const moment = require('moment');
 
 const router = express.Router();
 
@@ -239,29 +240,110 @@ router.post('/register-member', upload.fields([{ name: 'file_sk' }, { name: 'buk
 
 // **REQUEST PERPANJANG MEMBER**
 router.post('/request-perpanjang', upload.single('bukti_pembayaran_perpanjang'), (req, res) => {
-    const { user_id, nama_kuitansi, nominal_transfer } = req.body;
+    const { user_id, nama, nama_kuitansi, nominal_transfer } = req.body;
     const buktiPembayaranPath = req.file ? `/uploads/bukti_pembayaran/${req.file.filename}` : null;
 
-    if (!user_id || !nama_kuitansi || !nominal_transfer || !buktiPembayaranPath) {
-        return res.status(400).json({ message: 'User ID, Nama Kuitansi, Jumlah Transfer, dan Bukti Pembayaran wajib diisi!' });
+    if (!user_id || !nama || !nama_kuitansi || !nominal_transfer || !buktiPembayaranPath) {
+        return res.status(400).json({ message: 'User ID, Nama, Nama Kuitansi, Jumlah Transfer, dan Bukti Pembayaran wajib diisi!' });
     }
 
-    // Update data di tabel members
-    db.query(
-        `UPDATE members 
-         SET nama_kuitansi = ?, nominal_transfer = ?, bukti_pembayaran = ?, status_verifikasi = 'PENDING PERPANJANG', tanggal_submit = NOW()
-         WHERE user_id = ?`,
-        [nama_kuitansi, nominal_transfer, buktiPembayaranPath, user_id],
-        (err, result) => {
-            if (err) return res.status(500).json({ message: 'Gagal mengajukan perpanjangan', error: err });
+    db.query('SELECT nama, no_identitas, nama_generasi FROM members WHERE user_id = ?', [user_id], (err, results) => {
+        if (err) return res.status(500).json({ message: 'Gagal memeriksa data member', error: err });
+        if (results.length === 0) return res.status(404).json({ message: 'Member tidak ditemukan' });
 
-            res.status(200).json({ message: 'Permohonan perpanjangan berhasil diajukan', bukti_pembayaran: buktiPembayaranPath });
+        const { nama: namaDatabase, no_identitas, nama_generasi } = results[0];
+
+        const insertKeuanganLog = (noIdentitasFinal, isNamaBerubah = false) => {
+            db.query('SELECT saldo_akhir FROM admin_laporan_keuangan ORDER BY id DESC LIMIT 1', (err, saldoResults) => {
+                if (err) return res.status(500).json({ message: 'Gagal mengambil saldo terakhir', error: err });
+
+                const saldoTerakhir = saldoResults.length > 0 ? parseFloat(saldoResults[0].saldo_akhir) : 0;
+                const nominal = parseFloat(nominal_transfer);
+                const saldoBaru = saldoTerakhir + nominal;
+
+                const status = 'MASUK';
+                const deskripsi = isNamaBerubah
+                    ? `Perpanjangan & Ganti Nama dari ${noIdentitasFinal}, nama baru: ${nama}, kuitansi: ${nama_kuitansi}`
+                    : `Perpanjangan dari ${noIdentitasFinal}, nama: ${nama}, kuitansi: ${nama_kuitansi}`;
+
+                db.query(
+                    `INSERT INTO admin_laporan_keuangan (status, jumlah, deskripsi, saldo_akhir)
+                     VALUES (?, ?, ?, ?)`,
+                    [status, nominal, deskripsi, saldoBaru],
+                    (err) => {
+                        if (err) return res.status(500).json({ message: 'Gagal mencatat laporan keuangan', error: err });
+                        return res.status(200).json({ message: 'Permohonan perpanjangan berhasil diajukan', bukti_pembayaran: buktiPembayaranPath });
+                    }
+                );
+            });
+        };
+
+        const updatePerpanjang = (noIdentitasFinal, isNamaBerubah = false) => {
+            db.query(
+                `UPDATE members 
+                 SET nama_kuitansi = ?, nominal_transfer = ?, bukti_pembayaran = ?, status_verifikasi = 'PENDING PERPANJANG', tanggal_submit = NOW()
+                 WHERE user_id = ?`,
+                [nama_kuitansi, nominal_transfer, buktiPembayaranPath, user_id],
+                (err, result) => {
+                    if (err) return res.status(500).json({ message: 'Gagal mengajukan perpanjangan', error: err });
+                    if (result.affectedRows === 0) return res.status(400).json({ message: 'Tidak ada data yang diperbarui' });
+
+                    insertKeuanganLog(noIdentitasFinal, isNamaBerubah);
+                }
+            );
+        };
+
+        if (nama !== namaDatabase) {
+            const parts = no_identitas.split(".");
+            if (parts.length !== 3) return res.status(400).json({ message: 'Format no_identitas tidak valid' });
+
+            let currentSuffix = parseInt(parts[2]);
+            if (isNaN(currentSuffix)) return res.status(400).json({ message: 'Suffix no_identitas bukan angka' });
+
+            const oldSuffixStr = String(currentSuffix).padStart(2, '0');
+            const newSuffixInt = currentSuffix + 1;
+            const newSuffixStr = String(newSuffixInt).padStart(2, '0');
+            const newNoIdentitas = `${parts[0]}.${parts[1]}.${newSuffixStr}`;
+
+            let namaGenerasi = {};
+            try {
+                if (typeof nama_generasi === 'string') {
+                    namaGenerasi = JSON.parse(nama_generasi || '{}');
+                } else if (typeof nama_generasi === 'object' && nama_generasi !== null) {
+                    namaGenerasi = nama_generasi; // langsung pakai jika object
+                } else {
+                    namaGenerasi = {}; // fallback kosong
+                }
+            } catch (e) {
+                console.log('❌ Error parsing nama_generasi:', e);
+                console.log('Raw data:', nama_generasi);
+                console.log('Data yang diterima:', req.body);
+                console.log('File yang diterima:', req.file);
+                console.log('User ID:', user_id);
+                console.log('Nama:', nama); 
+                return res.status(500).json({ message: 'Gagal parsing nama_generasi', error: e });
+            }
+
+            const timestamp = moment().toISOString();
+            namaGenerasi[oldSuffixStr] = { name: namaDatabase, timestamp };
+            namaGenerasi[newSuffixStr] = { name: nama, timestamp };
+
+            db.query(
+                `UPDATE members 
+                 SET nama = ?, no_identitas = ?, nama_generasi = ?
+                 WHERE user_id = ?`,
+                [nama, newNoIdentitas, JSON.stringify(namaGenerasi), user_id],
+                (err) => {
+                    if (err) return res.status(500).json({ message: 'Gagal memperbarui nama & identitas', error: err });
+
+                    updatePerpanjang(newNoIdentitas, true);
+                }
+            );
+        } else {
+            updatePerpanjang(no_identitas, false);
         }
-    );
+    });
 });
-
-
-
 
 // **VERIFIKASI MEMBER (ADMIN)**
 router.put('/verify-member/:member_id', (req, res) => {
@@ -610,7 +692,7 @@ router.get('/member-info', (req, res) => {
     }
 
     const query = `
-        SELECT no_identitas, tipe_keanggotaan, institusi, nama, nomor_wa 
+        SELECT no_identitas, tipe_keanggotaan, institusi, nama, nomor_wa, nama_generasi 
         FROM members 
         WHERE user_id = ?
     `;
