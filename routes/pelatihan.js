@@ -67,7 +67,7 @@ const calculateDuration = (startDate, endDate) => {
     };
 };
 
-// enspoint untuk mendaftar pelatihan
+// endpoint untuk mendaftar pelatihan
 router.post('/mendaftar-pelatihan', async (req, res) => {
     const { pelatihan_id, member_id } = req.body;
     const connection = await db2.getConnection();
