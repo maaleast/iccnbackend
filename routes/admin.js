@@ -435,17 +435,20 @@ router.get('/pelatihan/:id', (req, res) => {
 
 // **POST Tambah Pelatihan Baru**
 router.post('/pelatihan/tambah', uploadPelatihan.single('banner'), (req, res) => {
-    const { kode, judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge } = req.body;
+    const { judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge } = req.body;
     const banner = req.file ? `/uploads/pelatihan/${req.file.filename}` : null;
 
-    // Validasi semua field termasuk kode
-    if (!kode || !judul_pelatihan || !tanggal_pelatihan || !tanggal_berakhir || !deskripsi_pelatihan || !link || !narasumber || !banner || !badge) {
+    // Generate kode otomatis jika tidak disediakan
+    const kode = generateRandomCode(); // Buat fungsi ini atau gunakan library seperti shortid
+
+    // Validasi semua field kecuali kode (karena bisa digenerate otomatis)
+    if (!judul_pelatihan || !tanggal_pelatihan || !tanggal_berakhir || !deskripsi_pelatihan || !link || !narasumber || !banner || !badge) {
         return res.status(400).json({ message: 'Semua field harus diisi' });
     }
 
-    // Query SQL dengan field kode
-    const sql = 'INSERT INTO pelatihan_member (kode, judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, upload_banner, badge) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)';
-    db.query(sql, [kode, judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, banner, badge], (err, result) => {
+    // Query SQL tanpa field kode (jika tidak diperlukan)
+    const sql = 'INSERT INTO pelatihan_member (judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, upload_banner, badge) VALUES (?, ?, ?, ?, ?, ?, ?, ?)';
+    db.query(sql, [judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, banner, badge], (err, result) => {
         if (err) {
             console.error('❌ Error menambahkan pelatihan:', err);
             return res.status(500).json({ message: 'Gagal menambahkan pelatihan' });
@@ -453,6 +456,11 @@ router.post('/pelatihan/tambah', uploadPelatihan.single('banner'), (req, res) =>
         res.json({ message: 'Pelatihan berhasil ditambahkan', id: result.insertId });
     });
 });
+
+// Fungsi untuk generate kode acak
+function generateRandomCode() {
+    return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
 
 // **PUT Edit Pelatihan** ===> D-7
 router.put('/pelatihan/edit/:id', uploadPelatihan.single('upload_banner'), (req, res) => {

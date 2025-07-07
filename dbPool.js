@@ -15,7 +15,17 @@ const db = mysql.createPool({
 db.getConnection()
     .then(connection => {
         console.log('✅ Database Pool Connected');
-        connection.release(); // Lepaskan koneksi kembali ke pool
+        connection.release();
+
+        // Ping connection setiap 5 menit supaya koneksi tetap hidup
+        setInterval(async () => {
+            try {
+                await db.query('SELECT 1');
+                // console.log('Ping database sukses');
+            } catch (err) {
+                console.error('Keep-alive error:', err);
+            }
+        }, 5 * 60 * 1000); // 5 menit
     })
     .catch(err => {
         console.error('❌ Error pool connecting to database:', err);
