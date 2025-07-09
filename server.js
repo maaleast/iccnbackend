@@ -30,8 +30,8 @@ const db = mysql.createPool({
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0,
-    connectTimeout: 20000,
-    acquireTimeout: 20000 
+    connectTimeout: 60000,
+    acquireTimeout: 60000,
 });
 
 // Tes koneksi dan setup ping connection

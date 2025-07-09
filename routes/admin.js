@@ -437,6 +437,7 @@ router.get('/pelatihan/:id', (req, res) => {
 router.post('/pelatihan/tambah', uploadPelatihan.single('banner'), (req, res) => {
     const { judul_pelatihan, tanggal_pelatihan, tanggal_berakhir, deskripsi_pelatihan, link, narasumber, badge } = req.body;
     const banner = req.file ? `/uploads/pelatihan/${req.file.filename}` : null;
+    console.log("File yang diterima:", req.file);
 
     // Generate kode otomatis jika tidak disediakan
     const kode = generateRandomCode(); // Buat fungsi ini atau gunakan library seperti shortid
