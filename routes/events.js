@@ -54,44 +54,47 @@ router.get('/all', async (req, res) => {
   }
 });
 
-// CREATE EVENT
 router.post('/create', upload.fields([{ name: 'image' }, { name: 'document' }]), async (req, res) => {
   try {
     const { title, shortDescription, description, startDate, endDate } = req.body;
-    const image = req.files?.image?.[0]?.filename || null;
-    const document = req.files?.document?.[0]?.filename || null;
 
     if (!title || !description || !startDate) {
-      // Hapus file yang sudah diupload jika validasi gagal
-      if (image) fs.unlinkSync(path.join(uploadDir, image));
-      if (document) fs.unlinkSync(path.join(uploadDir, document));
-      return res.status(400).json({ success: false, message: 'Judul, deskripsi, dan tanggal mulai wajib diisi' });
+      [req.files?.image, req.files?.document].forEach(file => file && fs.unlinkSync(file[0].path));
+      return res.status(400).json({ success: false, message: 'Required fields missing' });
     }
 
+    // 🔥 Tambahkan ini
+    const imageFile = req.files?.image?.[0]?.filename || null;
+    const documentFile = req.files?.document?.[0]?.filename || null;
+
     const [result] = await db.promise().query(
-      'INSERT INTO events (judul, deskripsi_singkat, deskripsi, start_date, end_date, gambar, document) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [title, shortDescription || null, description, startDate, endDate || startDate, image, document]
+      'INSERT INTO events (judul, deskripsi_singkat, deskripsi, tanggal, start_date, end_date, gambar, document) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [title, shortDescription || null, description, startDate, startDate, endDate || null, imageFile, documentFile]
     );
 
     res.status(201).json({
       success: true,
-      message: 'Event berhasil ditambahkan',
-      data: { 
-        id: result.insertId, 
+      message: 'Event berhasil dibuat',
+      data: {
+        id: result.insertId,
         judul: title,
-        deskripsi_singkat: shortDescription,
+        deskripsi_singkat: shortDescription || null,
         deskripsi: description,
-        start_date: startDate,
-        end_date: endDate || startDate,
-        gambar: image,
-        document: document
+        tanggal: formatDate(startDate),
+        start_date: formatDate(startDate),
+        end_date: formatDate(endDate || startDate),
+        gambar: imageFile ? `http://${req.get('host')}/uploads/events/${imageFile}` : null,
+        document: documentFile ? `http://${req.get('host')}/uploads/events/${documentFile}` : null
       }
     });
+
   } catch (error) {
+    [req.files?.image, req.files?.document].forEach(file => file && fs.unlinkSync(file[0].path));
     console.error('Error creating event:', error);
-    res.status(500).json({ success: false, message: 'Gagal menambahkan event' });
+    res.status(500).json({ success: false, message: 'Failed to create event', error: error.message });
   }
 });
+
 
 // GET SINGLE EVENT
 router.get('/:id', async (req, res) => {
