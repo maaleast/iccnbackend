@@ -5,190 +5,207 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
-// Configure image storage
+// Setup upload directory (sama seperti di services.js)
+const uploadDir = path.join(__dirname, '../uploads/');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+// Konfigurasi penyimpanan (sama seperti di services.js)
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    const dir = path.join(__dirname, '../../uploads/events');
-    fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
+    cb(null, uploadDir);
   },
   filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
-    cb(null, 'event-' + uniqueSuffix + ext);
+    const uniqueName = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueName + path.extname(file.originalname));
   }
 });
 
-const upload = multer({
-  storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+// Middleware multer (sama seperti di services.js)
+const upload = multer({ 
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype.startsWith('image/')) {
-      cb(null, true);
-    } else {
-      cb(new Error('Only image files are allowed!'), false);
-    }
+    const allowedTypes = [
+      'image/jpeg', 'image/png', 'image/jpg',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ];
+    allowedTypes.includes(file.mimetype) ? cb(null, true) : cb(new Error('Invalid file type'));
   }
 });
 
-// GET all events
+// Helper function
+const formatDate = (dateString) => {
+  return dateString ? new Date(dateString).toISOString().split('T')[0] : null;
+};
+
+// GET ALL EVENTS
 router.get('/all', async (req, res) => {
   try {
-    const result = await db.query('SELECT * FROM events ORDER BY created_at DESC');
-    res.status(200).json({ 
-      success: true, 
-      data: result.rows
-    });
+    const [events] = await db.promise().query('SELECT * FROM events ORDER BY created_at DESC');
+    
+    // Format response sama seperti di services.js
+    res.json({ success: true, data: events });
   } catch (error) {
     console.error('Error fetching events:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to fetch events',
-      error: error.message 
-    });
+    res.status(500).json({ success: false, message: 'Gagal mengambil data events' });
   }
 });
 
-// CREATE event
-router.post('/create', upload.single('image'), async (req, res) => {
+// CREATE EVENT
+router.post('/create', upload.fields([{ name: 'image' }, { name: 'document' }]), async (req, res) => {
   try {
-    const { title, shortDescription, description, date } = req.body;
-    
-    if (!title || !description || !date) {
-      return res.status(400).json({
-        success: false,
-        message: 'Judul, deskripsi, dan tanggal wajib diisi'
-      });
+    const { title, shortDescription, description, startDate, endDate } = req.body;
+    const image = req.files?.image?.[0]?.filename || null;
+    const document = req.files?.document?.[0]?.filename || null;
+
+    if (!title || !description || !startDate) {
+      // Hapus file yang sudah diupload jika validasi gagal
+      if (image) fs.unlinkSync(path.join(uploadDir, image));
+      if (document) fs.unlinkSync(path.join(uploadDir, document));
+      return res.status(400).json({ success: false, message: 'Judul, deskripsi, dan tanggal mulai wajib diisi' });
     }
 
-    const image = req.file ? req.file.filename : null;
-
-    const result = await db.query(
-      `INSERT INTO events 
-       (judul, deskripsi_singkat, deskripsi, tanggal, gambar) 
-       VALUES ($1, $2, $3, $4, $5) 
-       RETURNING *`,
-      [title, shortDescription, description, date, image]
+    const [result] = await db.promise().query(
+      'INSERT INTO events (judul, deskripsi_singkat, deskripsi, start_date, end_date, gambar, document) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [title, shortDescription || null, description, startDate, endDate || startDate, image, document]
     );
 
-    res.status(201).json({ 
-      success: true, 
-      data: result.rows[0],
-      message: 'Event berhasil dibuat'
+    res.status(201).json({
+      success: true,
+      message: 'Event berhasil ditambahkan',
+      data: { 
+        id: result.insertId, 
+        judul: title,
+        deskripsi_singkat: shortDescription,
+        deskripsi: description,
+        start_date: startDate,
+        end_date: endDate || startDate,
+        gambar: image,
+        document: document
+      }
     });
   } catch (error) {
     console.error('Error creating event:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Gagal membuat event',
-      error: error.message 
-    });
+    res.status(500).json({ success: false, message: 'Gagal menambahkan event' });
   }
 });
 
-// UPDATE event
-router.put('/update/:id', upload.single('image'), async (req, res) => {
+// GET SINGLE EVENT
+router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { title, shortDescription, description, date, image_old } = req.body;
-    
-    if (!title || !description || !date) {
-      return res.status(400).json({
-        success: false,
-        message: 'Judul, deskripsi, dan tanggal wajib diisi'
-      });
+    const [rows] = await db.promise().query('SELECT * FROM events WHERE id = ?', [id]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Event tidak ditemukan' });
     }
 
-    let image = image_old;
-    if (req.file) {
-      image = req.file.filename;
-      // Delete old image if exists
-      if (image_old) {
-        const oldImagePath = path.join(__dirname, '../../uploads/events', image_old);
-        fs.unlink(oldImagePath, (err) => {
-          if (err) console.error('Error deleting old image:', err);
-        });
+    res.json({ success: true, data: rows[0] });
+  } catch (error) {
+    console.error('Error fetching event:', error);
+    res.status(500).json({ success: false, message: 'Gagal mengambil data event' });
+  }
+});
+
+// UPDATE EVENT
+router.put('/update/:id', upload.fields([{ name: 'image' }, { name: 'document' }]), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, shortDescription, description, startDate, endDate, old_image, old_document } = req.body;
+
+    if (!title || !description || !startDate) {
+      return res.status(400).json({ success: false, message: 'Judul, deskripsi, dan tanggal mulai wajib diisi' });
+    }
+
+    const [existing] = await db.promise().query('SELECT * FROM events WHERE id = ?', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, message: 'Event tidak ditemukan' });
+    }
+
+    let image = old_image;
+    let document = old_document;
+
+    // Handle image update
+    if (req.files?.image?.[0]) {
+      image = req.files.image[0].filename;
+      if (old_image) {
+        const oldPath = path.join(uploadDir, old_image);
+        if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
       }
     }
 
-    const result = await db.query(
-      `UPDATE events 
-       SET judul = $1, 
-           deskripsi_singkat = $2, 
-           deskripsi = $3, 
-           tanggal = $4, 
-           gambar = $5, 
-           updated_at = NOW() 
-       WHERE id = $6 
-       RETURNING *`,
-      [title, shortDescription, description, date, image, id]
-    );
-
-    if (result.rowCount === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Event tidak ditemukan' 
-      });
+    // Handle document update
+    if (req.files?.document?.[0]) {
+      document = req.files.document[0].filename;
+      if (old_document) {
+        const oldDocPath = path.join(uploadDir, old_document);
+        if (fs.existsSync(oldDocPath)) fs.unlinkSync(oldDocPath);
+      }
     }
 
-    res.status(200).json({ 
+    await db.promise().query(
+      `UPDATE events SET 
+        judul = ?, 
+        deskripsi_singkat = ?, 
+        deskripsi = ?, 
+        start_date = ?,
+        end_date = ?,
+        gambar = ?, 
+        document = ?,
+        updated_at = NOW()
+       WHERE id = ?`,
+      [title, shortDescription || null, description, startDate, endDate || startDate, image, document, id]
+    );
+
+    res.json({ 
       success: true, 
-      data: result.rows[0],
-      message: 'Event berhasil diperbarui'
+      message: 'Event berhasil diperbarui',
+      data: {
+        id,
+        judul: title,
+        deskripsi_singkat: shortDescription,
+        deskripsi: description,
+        start_date: startDate,
+        end_date: endDate || startDate,
+        gambar: image,
+        document: document
+      }
     });
   } catch (error) {
     console.error('Error updating event:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Gagal memperbarui event',
-      error: error.message 
-    });
+    res.status(500).json({ success: false, message: 'Gagal memperbarui event' });
   }
 });
 
-// DELETE event
+// DELETE EVENT
 router.delete('/delete/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    // Get image data first
-    const eventResult = await db.query('SELECT gambar FROM events WHERE id = $1', [id]);
-    if (eventResult.rowCount === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Event tidak ditemukan' 
-      });
+    const [data] = await db.promise().query('SELECT * FROM events WHERE id = ?', [id]);
+    if (data.length === 0) {
+      return res.status(404).json({ success: false, message: 'Event tidak ditemukan' });
     }
 
-    // Delete image if exists
-    const image = eventResult.rows[0].gambar;
-    if (image) {
-      const imagePath = path.join(__dirname, '../../uploads/events', image);
-      fs.unlink(imagePath, (err) => {
-        if (err) console.error('Error deleting image:', err);
-      });
+    const { gambar, document } = data[0];
+    if (gambar) {
+      const imgPath = path.join(uploadDir, gambar);
+      if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath);
+    }
+    if (document) {
+      const docPath = path.join(uploadDir, document);
+      if (fs.existsSync(docPath)) fs.unlinkSync(docPath);
     }
 
-    // Delete event from database
-    const result = await db.query('DELETE FROM events WHERE id = $1', [id]);
-    if (result.rowCount === 0) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Event tidak ditemukan' 
-      });
-    }
+    await db.promise().query('DELETE FROM events WHERE id = ?', [id]);
 
-    res.status(200).json({ 
-      success: true, 
-      message: 'Event berhasil dihapus'
-    });
+    res.json({ success: true, message: 'Event berhasil dihapus' });
   } catch (error) {
     console.error('Error deleting event:', error);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Gagal menghapus event',
-      error: error.message 
-    });
+    res.status(500).json({ success: false, message: 'Gagal menghapus event' });
   }
 });
 

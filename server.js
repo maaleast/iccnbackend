@@ -12,6 +12,7 @@ const beritaRoutes = require('./routes/berita');
 const organisasiRoutes = require('./routes/organisasi');
 const pelatihanRoutes = require('./routes/pelatihan');
 const servicesRoutes = require('./routes/services');
+const eventsRouter = require('./routes/events');
 
 const app = express();
 const port = process.env.PORT || 5050;
@@ -72,6 +73,7 @@ app.use('/berita', beritaRoutes);
 app.use('/organisasi', organisasiRoutes);
 app.use('/pelatihan', pelatihanRoutes);
 app.use('/services', servicesRoutes);
+app.use('/events', eventsRouter);
 
 // Jalankan server
 app.listen(port, () => {
