@@ -70,99 +70,80 @@ const calculateDuration = (startDate, endDate) => {
 // endpoint untuk mendaftar pelatihan
 router.post('/mendaftar-pelatihan', async (req, res) => {
     const { pelatihan_id, member_id } = req.body;
-    const connection = await db2.getConnection();
-
     if (!pelatihan_id || !member_id) {
         return res.status(400).json({ message: 'pelatihan_id dan member_id harus diisi' });
     }
 
+    let connection;
     try {
-        try {
-            await connection.ping();
-        } catch (pingErr) {
-            console.error('❌ Ping ke database gagal:', pingErr);
-            return res.status(500).json({ message: 'Koneksi database terputus sebelum transaksi' });
-        }
-        
-        // Mulai transaksi
-        await connection.beginTransaction();
+        // Ambil koneksi awal
+        connection = await db2.getConnection();
+        await connection.ping();
 
-        // 1. Cek apakah pelatihan ada dan member ada
-        const [pelatihanResults] = await connection.execute('SELECT * FROM pelatihan_member WHERE id = ?', [pelatihan_id]);
-        const [memberResults] = await connection.execute('SELECT no_identitas, badge FROM members WHERE id = ?', [member_id]);
+        // ✅ STEP 1: Validasi awal DI LUAR transaksi
+        const [[pelatihan]] = await connection.execute('SELECT * FROM pelatihan_member WHERE id = ?', [pelatihan_id]);
+        const [[member]] = await connection.execute('SELECT no_identitas, badge FROM members WHERE id = ?', [member_id]);
 
-        if (pelatihanResults.length === 0) {
-            await connection.rollback();
+        if (!pelatihan) {
             return res.status(404).json({ message: `Pelatihan dengan ID ${pelatihan_id} tidak ditemukan` });
         }
-
-        if (memberResults.length === 0) {
-            await connection.rollback();
+        if (!member) {
             return res.status(404).json({ message: `Member dengan ID ${member_id} tidak ditemukan` });
         }
 
-        const pelatihan = pelatihanResults[0];
-        const member = memberResults[0]; // Ambil elemen pertama dari array
-        console.log('member:', member); // Debugging
-
         const noIdentitas = member.no_identitas;
-        console.log('noIdentitas:', noIdentitas); // Debugging
 
-        // 2. Cek apakah member sudah mendaftar ke pelatihan ini
-        const [pesertaResults] = await connection.execute('SELECT * FROM peserta_pelatihan WHERE pelatihan_id = ? AND member_id = ?', [pelatihan_id, member_id]);
-        if (pesertaResults.length > 0) {
-            await connection.rollback();
-            return res.status(400).json({ title: 'Pendaftaran', message: `Anda sudah mendaftar ke dalam ${pelatihan.judul_pelatihan}` });
-        }
-
-        // 3. Generate kode unik
-        let isUnique = false;
+        // ✅ STEP 2: Generate kode unik dulu di luar transaksi
         let kode;
-        do {
+        while (true) {
             const transformedIdentitas = transformIdentitas(noIdentitas);
             const randomChars = generateRandomChars(9);
-            const combinedString = transformedIdentitas + randomChars;
-            const shuffledString = shuffleString(combinedString);
-            kode = transformToRandomChars(shuffledString);
+            const combinedString = shuffleString(transformedIdentitas + randomChars);
+            kode = transformToRandomChars(combinedString);
 
-            isUnique = await isKodeUnique(kode);
-        } while (!isUnique);
+            const [[dupCheck]] = await connection.execute('SELECT 1 FROM peserta_pelatihan WHERE kode = ?', [kode]);
+            if (!dupCheck) break;
+        }
 
-        // 4. Simpan pendaftaran ke peserta_pelatihan
-        await connection.execute('INSERT INTO peserta_pelatihan (pelatihan_id, member_id, kode, kirim) VALUES (?, ?, ?, ?)', [pelatihan_id, member_id, kode, 0]);
-
-        // 5. Proses badge data
+        // ✅ STEP 3: Parse badge di luar transaksi
         const tahunKey = noIdentitas.split('.').pop();
-        console.log('tahun key: ' + tahunKey);
         let badgeData = {};
-
         try {
-            if (typeof member.badge === 'string' && member.badge.trim() !== '') {
-                badgeData = JSON.parse(member.badge);
-            } else if (typeof member.badge === 'object' && member.badge !== null) {
-                badgeData = member.badge; // Jika badge sudah berupa objek, gunakan langsung
-            }
-        } catch (parseError) {
-            console.error('❌ Error parsing badge data:', parseError);
-            await connection.rollback();
+            badgeData = typeof member.badge === 'string' ? JSON.parse(member.badge) : (member.badge || {});
+        } catch (err) {
             return res.status(500).json({ message: 'Gagal memproses data badge', rawData: member.badge });
         }
-        console.log('badge data:', badgeData);
-        // Pastikan badgeData[tahunKey] terdefinisi
-        if (!badgeData[tahunKey]) {
-            badgeData[tahunKey] = {};
+        if (!badgeData[tahunKey]) badgeData[tahunKey] = {};
+
+        // ✅ STEP 4: Mulai transaksi untuk bagian krusial
+        await connection.beginTransaction();
+
+        // 🚨 Validasi ulang pendaftaran DI DALAM transaksi
+        const [[duplicate]] = await connection.execute(
+            'SELECT 1 FROM peserta_pelatihan WHERE pelatihan_id = ? AND member_id = ? FOR UPDATE',
+            [pelatihan_id, member_id]
+        );
+        if (duplicate) {
+            await connection.rollback();
+            return res.status(400).json({ message: `Anda sudah mendaftar ke dalam ${pelatihan.judul_pelatihan}` });
         }
 
-        // Cek apakah pelatihan sudah terdaftar
-        const existingEntries = Object.values(badgeData[tahunKey]).map(p => p.pelatihan_id);
-        if (existingEntries.includes(pelatihan_id)) {
+        // Tambah ke peserta_pelatihan
+        await connection.execute(
+            'INSERT INTO peserta_pelatihan (pelatihan_id, member_id, kode, kirim) VALUES (?, ?, ?, ?)',
+            [pelatihan_id, member_id, kode, 0]
+        );
+
+        // 🚨 Validasi ulang badge untuk tahun ini (dalam transaksi)
+        const existingPelatihan = Object.values(badgeData[tahunKey]).some(p => p.pelatihan_id == pelatihan_id);
+        if (existingPelatihan) {
             await connection.rollback();
             return res.status(400).json({ message: 'Member sudah terdaftar di pelatihan ini' });
         }
 
-        // 6. Tambahkan pelatihan ke dalam data badge
-        const newIndex = Object.keys(badgeData[tahunKey]).length;
-        badgeData[tahunKey][newIndex] = {
+        // Tambahkan ke badge
+        const index = Object.keys(badgeData[tahunKey]).length;
+        badgeData[tahunKey][index] = {
             pelatihan_id: pelatihan.id,
             judul_pelatihan: pelatihan.judul_pelatihan,
             deskripsi_pelatihan: pelatihan.deskripsi_pelatihan,
@@ -172,145 +153,76 @@ router.post('/mendaftar-pelatihan', async (req, res) => {
             generasi: tahunKey
         };
 
-        console.log('badgeData setelah diupdate:', badgeData); // Debugging
-        const jsonBadge = JSON.stringify(badgeData);
-        console.log('📦 Ukuran badge JSON (bytes):', Buffer.byteLength(jsonBadge));
-        console.log('🔍 Ukuran badge JSON:', jsonBadge.length, 'karakter');
-        console.log('🔍 Member ID:', member_id);
+        const badgeJson = JSON.stringify(badgeData);
 
-        try {
-            await connection.execute('SELECT 1');
-            console.log('✅ Koneksi database valid');
-        } catch (e) {
-            console.error('❌ Koneksi tidak valid:', e);
-            return res.status(500).json({ message: 'Koneksi database tidak tersedia' });
-        }
+        await connection.execute(
+            'UPDATE members SET badge = ? WHERE id = ?',
+            [badgeJson, member_id]
+        );
 
-        // 7. Update badge di tabel members
-        console.log('🚀 Before update query...');
-        console.log('🔍 Menjalankan update members...');
-        try {
-            // Misalnya update badge
-            console.time('UPDATE query');
-            await connection.execute({
-                sql: 'UPDATE members SET badge = ? WHERE id = ?',
-                timeout: 60000 // 10 detik
-            }, [jsonBadge, member_id]);
-
-            console.timeEnd('UPDATE query');
-        } catch (queryErr) {
-            console.error('❌ Query gagal:', queryErr.code);
-            
-            // rollback aman
-            try {
-                await connection.rollback();
-            } catch (rollbackErr) {
-                console.error('❌ Gagal rollback:', rollbackErr.message);
-            }
-
-            return res.status(500).json({ message: 'Query error', error: queryErr.message });
-        }
-        console.log('🔍 Update members selesai');
-        console.log('✅ After update query');
-
-        // 8. Commit transaksi
+        // Commit transaksi
         await connection.commit();
-        res.json({ message: 'Berhasil mendaftar pelatihan', kode: kode, badge: badgeData });
-        } catch (error) {
-        console.error('❌ Error:', error);
 
-        // Cegah rollback kalau koneksi sudah tidak valid
-        if (connection && connection.rollback) {
-            try {
-                await connection.rollback();
-            } catch (rollbackErr) {
-                console.error('❌ Gagal rollback:', rollbackErr.message);
-            }
+        res.json({ message: 'Berhasil mendaftar pelatihan', kode, badge: badgeData });
 
-            try {
-                await connection.ping(); // pastikan masih hidup
-                connection.release();
-            } catch (releaseErr) {
-                console.warn('⚠️ Gagal release koneksi karena koneksi sudah tertutup');
-            }
+    } catch (error) {
+        if (connection) {
+            try { await connection.rollback(); } catch {}
         }
-
+        console.error('❌ Error:', error);
         res.status(500).json({ message: 'Terjadi kesalahan', error: error.message });
     } finally {
-        // Cegah release kalau koneksi tidak valid
-        if (connection && connection.release) {
-            try {
-                connection.release();
-            } catch (releaseError) {
-                console.error('❌ Gagal release koneksi:', releaseError.message);
+        if (connection) {
+            try { connection.release(); } catch (err) {
+                console.error('❌ Gagal release koneksi:', err.message);
             }
         }
     }
 });
 
+
 // Endpoint untuk menyelesaikan pelatihan
 router.post('/selesai-pelatihan', async (req, res) => {
     const { pelatihan_id, kode, idMember } = req.body;
+    if (!pelatihan_id || !kode || !idMember) {
+        return res.status(400).json({ message: 'Semua data harus diisi' });
+    }
 
-    // Mulai transaksi
-    const connection = await db2.getConnection();
+    let connection;
     try {
-        await connection.beginTransaction();
+        connection = await db2.getConnection();
+        await connection.ping();
 
-        // 1. Cari data di tabel peserta_pelatihan
-        const [pesertaResults] = await connection.query(
+        // ✅ Step 1: Validasi awal peserta
+        const [[peserta]] = await connection.query(
             'SELECT * FROM peserta_pelatihan WHERE pelatihan_id = ? AND member_id = ?',
             [pelatihan_id, idMember]
         );
-
-        if (pesertaResults.length === 0) {
-            await connection.rollback();
+        if (!peserta) {
             return res.status(404).json({ message: 'Data peserta pelatihan tidak ditemukan' });
         }
-
-        const peserta = pesertaResults[0];
-
-        // 2. Validasi kode
         if (peserta.kode !== kode) {
-            await connection.rollback();
             return res.status(400).json({ message: 'Kode pelatihan tidak valid' });
         }
 
-        // 3. Update waktu_selesai di tabel peserta_pelatihan
-        const waktuSelesai = moment().format('YYYY-MM-DD HH:mm:ss');
-        await connection.query(
-            'UPDATE peserta_pelatihan SET waktu_selesai = ? WHERE pelatihan_id = ? AND member_id = ?',
-            [waktuSelesai, pelatihan_id, idMember]
-        );
-
-        // 4. Cari data di tabel members
-        const [memberResults] = await connection.query(
+        // ✅ Step 2: Ambil member dan badge
+        const [[member]] = await connection.query(
             'SELECT no_identitas, badge FROM members WHERE id = ?',
             [idMember]
         );
-
-        if (memberResults.length === 0) {
-            await connection.rollback();
+        if (!member) {
             return res.status(404).json({ message: 'Member tidak ditemukan' });
         }
 
-        const member = memberResults[0];
-
-        // 5. Ambil 2 digit terakhir dari no_identitas
         const tahunKey = member.no_identitas.slice(-2);
-
-        // 6. Parse data badge
-        let badgeData = {};
+        let badgeData;
         try {
-            badgeData = typeof member.badge === 'string' ? JSON.parse(member.badge) : member.badge;
-        } catch (error) {
-            await connection.rollback();
-            return res.status(500).json({ message: 'Gagal memproses data badge', error: error.message });
+            badgeData = typeof member.badge === 'string' ? JSON.parse(member.badge) : member.badge || {};
+        } catch (err) {
+            return res.status(500).json({ message: 'Gagal memproses data badge', error: err.message });
         }
 
-        // 7. Cari pelatihan_id di dalam badgeData
         if (!badgeData[tahunKey]) {
-            await connection.rollback();
             return res.status(400).json({ message: 'Tidak ada badge untuk tahun ini' });
         }
 
@@ -323,44 +235,58 @@ router.post('/selesai-pelatihan', async (req, res) => {
         }
 
         if (pelatihanIndex === null) {
-            await connection.rollback();
             return res.status(400).json({ message: 'Pelatihan tidak ditemukan dalam badge' });
         }
 
-        // 8. Hitung lama_pelatihan
+        // ✅ Step 3: Siapkan data update
+        const waktuSelesai = moment().format('YYYY-MM-DD HH:mm:ss');
         const waktuDaftar = new Date(peserta.waktu_daftar);
-        const waktuSelesaiDate = new Date(waktuSelesai);
-        const lamaPelatihan = calculateDuration(waktuDaftar, waktuSelesaiDate);
+        const lamaPelatihan = calculateDuration(waktuDaftar, new Date(waktuSelesai));
 
-        // 9. Update status dan tambahkan waktu_daftar, waktu_selesai, lama_pelatihan
-        badgeData[tahunKey][pelatihanIndex].status = 'completed';
-        badgeData[tahunKey][pelatihanIndex].waktu_daftar = peserta.waktu_daftar;
-        badgeData[tahunKey][pelatihanIndex].waktu_selesai = waktuSelesai;
-        badgeData[tahunKey][pelatihanIndex].lama_pelatihan = lamaPelatihan;
+        // Update badge di memori (belum di DB)
+        badgeData[tahunKey][pelatihanIndex] = {
+            ...badgeData[tahunKey][pelatihanIndex],
+            status: 'completed',
+            waktu_daftar: peserta.waktu_daftar,
+            waktu_selesai: waktuSelesai,
+            lama_pelatihan: lamaPelatihan
+        };
 
-        // 10. Update badge di tabel members
+        const badgeJSON = JSON.stringify(badgeData);
+
+        // ✅ Step 4: Transaksi untuk update database
+        await connection.beginTransaction();
+
         await connection.query(
-            'UPDATE members SET badge = ? WHERE id = ?',
-            [JSON.stringify(badgeData), idMember]
+            'UPDATE peserta_pelatihan SET waktu_selesai = ? WHERE pelatihan_id = ? AND member_id = ?',
+            [waktuSelesai, pelatihan_id, idMember]
         );
 
-        // Commit transaksi
+        await connection.query(
+            'UPDATE members SET badge = ? WHERE id = ?',
+            [badgeJSON, idMember]
+        );
+
         await connection.commit();
 
-        // Beri respons sukses
-        res.json({ 
-            message: 'Pelatihan selesai! Badge telah diperbarui.', 
-            badge: badgeData[tahunKey][pelatihanIndex] 
+        res.json({
+            message: 'Pelatihan selesai! Badge telah diperbarui.',
+            badge: badgeData[tahunKey][pelatihanIndex]
         });
 
-    } catch (error) {
-        await connection.rollback();
-        console.error('❌ Error:', error);
-        res.status(500).json({ message: 'Terjadi kesalahan pada server', error: error.message });
+    } catch (err) {
+        if (connection) {
+            try { await connection.rollback(); } catch {}
+        }
+        console.error('❌ Error:', err);
+        res.status(500).json({ message: 'Terjadi kesalahan pada server', error: err.message });
     } finally {
-        connection.release();
+        if (connection) {
+            try { connection.release(); } catch {}
+        }
     }
 });
+
 
 // Endpoint untuk mendapatkan ID member berdasarkan user_id (Tanpa Authentication) untuk mendaftar pelatihan
 router.get('/members/id/:user_id', async (req, res) => {
