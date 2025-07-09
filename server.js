@@ -14,7 +14,7 @@ const pelatihanRoutes = require('./routes/pelatihan');
 const servicesRoutes = require('./routes/services');
 
 const app = express();
-const port = process.env.PORT || 5050;
+const port = process.env.PORT || 8080;
 
 // Middleware
 app.use(cors());
